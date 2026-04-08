@@ -1,175 +1,90 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
-# OpenKaliClaude Installation Script
-# One-line installer for OpenKaliClaude
+# OpenKaliClaude installer (Linux / macOS / WSL)
 #
-# Usage: curl -fsSL https://openkaliclaude.com/install.sh | bash
+# Non-interactive. Clones the repo, installs Node deps, and prints the
+# next-step commands for logging in with a Claude subscription.
+#
+#   curl -fsSL https://raw.githubusercontent.com/Everaldtah/openkalicode/main/install.sh | bash
+#
+# Or from a checkout:
+#   ./install.sh
+#
+# Environment variables:
+#   OKAL_INSTALL_DIR   target directory (default: $HOME/openkalicode)
+#   OKAL_BRANCH        git branch to check out (default: main)
+#   OKAL_SKIP_TOOLS    set to 1 to skip the security-tool installer
 #
 
-set -e
+set -euo pipefail
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+REPO_URL="https://github.com/Everaldtah/openkalicode.git"
+BRANCH="${OKAL_BRANCH:-main}"
+INSTALL_DIR="${OKAL_INSTALL_DIR:-$HOME/openkalicode}"
 
-# Configuration
-REPO="openkaliclaude/core"
-INSTALL_DIR="/usr/local/bin"
-OKAL_HOME="$HOME/.okal"
+GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
+info()    { echo -e "${BLUE}[+]${NC} $*"; }
+ok()      { echo -e "${GREEN}[✓]${NC} $*"; }
+warn()    { echo -e "${YELLOW}[!]${NC} $*"; }
+fail()    { echo -e "${RED}[✗]${NC} $*" >&2; exit 1; }
 
-# Functions
-print_banner() {
-    echo -e "${BLUE}"
-    cat << "EOF"
- ██████  ██████  ███████ ███    ██ ██   ██  █████  ██      ██      
-██    ██ ██   ██ ██      ████   ██ ██  ██  ██   ██ ██      ██      
-██    ██ ██████  █████   ██ ██  ██ █████   ███████ ██      ██      
-██    ██ ██   ██ ██      ██  ██ ██ ██  ██  ██   ██ ██      ██      
- ██████  ██   ██ ███████ ██   ████ ██   ██ ██   ██ ███████ ███████ 
-                                                                    
-    ██████  ██╗      █████╗ ██╗   ██╗██████╗ ███████╗              
-    ██╔══██╗██║     ██╔══██╗██║   ██║██╔══██╗██╔════╝              
-    ██████╔╝██║     ███████║██║   ██║██║  ██║█████╗                
-    ██╔══██╗██║     ██╔══██║██║   ██║██║  ██║██╔══╝                
-    ██║  ██║███████╗██║  ██║╚██████╔╝██████╔╝███████╗              
-    ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚══════╝              
-EOF
-    echo -e "${NC}"
-    echo -e "${GREEN}AI-Powered Cybersecurity CLI Framework${NC}"
-    echo ""
+require() {
+  command -v "$1" >/dev/null 2>&1 || fail "$1 not found in PATH"
 }
 
-print_error() {
-    echo -e "${RED}✗ $1${NC}"
-}
+main() {
+  echo
+  info "OpenKaliClaude installer"
+  echo
 
-print_success() {
-    echo -e "${GREEN}✓ $1${NC}"
-}
+  # ── prerequisites ─────────────────────────────────────────────────────────
+  require git
+  require node
+  require npm
 
-print_warning() {
-    echo -e "${YELLOW}⚠ $1${NC}"
-}
+  node_major=$(node -v | sed 's/v//' | cut -d. -f1)
+  if [ "$node_major" -lt 18 ]; then
+    fail "Node.js 18+ is required (found $(node -v))"
+  fi
+  ok "node $(node -v), npm $(npm -v)"
 
-print_info() {
-    echo -e "${BLUE}ℹ $1${NC}"
-}
+  # ── clone or update ───────────────────────────────────────────────────────
+  if [ -d "$INSTALL_DIR/.git" ]; then
+    info "Updating existing checkout at $INSTALL_DIR"
+    git -C "$INSTALL_DIR" fetch --depth 1 origin "$BRANCH"
+    git -C "$INSTALL_DIR" reset --hard "origin/$BRANCH"
+  else
+    info "Cloning $REPO_URL → $INSTALL_DIR"
+    git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
+  fi
+  cd "$INSTALL_DIR"
 
-check_prerequisites() {
-    print_info "Checking prerequisites..."
-    
-    # Check OS
-    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-        OS="linux"
-    elif [[ "$OSTYPE" == "darwin"* ]]; then
-        OS="macos"
+  # ── npm install ───────────────────────────────────────────────────────────
+  # --legacy-peer-deps is required because the Claude Agent SDK currently
+  # peer-depends on zod v4 while the rest of the project still uses zod v3.
+  # The actual runtime is unaffected.
+  info "Installing Node dependencies (this can take a minute)…"
+  npm install --legacy-peer-deps
+
+  ok "Dependencies installed"
+
+  # ── make bin/* executable ─────────────────────────────────────────────────
+  chmod +x bin/okal-agent bin/okal-login 2>/dev/null || true
+
+  # ── optional: security tools ──────────────────────────────────────────────
+  if [ "${OKAL_SKIP_TOOLS:-0}" != "1" ]; then
+    if [ -f "$INSTALL_DIR/scripts/install-tools.sh" ]; then
+      info "Running security-tool installer (skip with OKAL_SKIP_TOOLS=1)"
+      bash "$INSTALL_DIR/scripts/install-tools.sh" || warn "Some tools failed to install"
     else
-        print_error "Unsupported operating system: $OSTYPE"
-        exit 1
+      warn "No system-level tool installer present — install nmap/nikto/sqlmap/hashcat/msfconsole manually if you plan to run real scans."
     fi
-    
-    # Check Node.js
-    if ! command -v node &> /dev/null; then
-        print_error "Node.js is not installed"
-        print_info "Please install Node.js 18+ from https://nodejs.org/"
-        exit 1
-    fi
-    
-    NODE_VERSION=$(node -v | cut -d'v' -f2 | cut -d'.' -f1)
-    if [ "$NODE_VERSION" -lt 18 ]; then
-        print_error "Node.js version 18+ required (found $(node -v))"
-        exit 1
-    fi
-    
-    print_success "Node.js $(node -v) found"
-    
-    # Check npm
-    if ! command -v npm &> /dev/null; then
-        print_error "npm is not installed"
-        exit 1
-    fi
-    
-    print_success "npm $(npm -v) found"
-}
+  fi
 
-install_with_npm() {
-    print_info "Installing OpenKaliClaude via npm..."
-    
-    if npm install -g @openkaliclaude/core; then
-        print_success "OpenKaliClaude installed successfully"
-    else
-        print_error "Failed to install via npm"
-        return 1
-    fi
-}
-
-install_from_source() {
-    print_info "Installing from source..."
-    
-    TEMP_DIR=$(mktemp -d)
-    cd "$TEMP_DIR"
-    
-    print_info "Cloning repository..."
-    if ! git clone --depth 1 "https://github.com/$REPO.git" openkaliclaude; then
-        print_error "Failed to clone repository"
-        rm -rf "$TEMP_DIR"
-        return 1
-    fi
-    
-    cd openkaliclaude
-    
-    print_info "Installing dependencies..."
-    if ! npm install; then
-        print_error "Failed to install dependencies"
-        rm -rf "$TEMP_DIR"
-        return 1
-    fi
-    
-    print_info "Building..."
-    if ! npm run build; then
-        print_error "Failed to build"
-        rm -rf "$TEMP_DIR"
-        return 1
-    fi
-    
-    print_info "Linking binary..."
-    if ! npm link; then
-        print_error "Failed to link binary"
-        rm -rf "$TEMP_DIR"
-        return 1
-    fi
-    
-    cd "$HOME"
-    rm -rf "$TEMP_DIR"
-    
-    print_success "OpenKaliClaude installed from source"
-}
-
-install_security_tools() {
-    print_info "Installing security tools..."
-    
-    if command -v okal &> /dev/null; then
-        print_info "Installing core security tools (this may take a while)..."
-        okal install core || print_warning "Some tools failed to install"
-    else
-        print_warning "okal command not found, skipping tool installation"
-    fi
-}
-
-setup_directories() {
-    print_info "Setting up directories..."
-    
-    mkdir -p "$OKAL_HOME"
-    mkdir -p "$OKAL_HOME/reports"
-    mkdir -p "$OKAL_HOME/logs"
-    mkdir -p "$OKAL_HOME/scopes"
-    
-    # Create default scope
-    if [ ! -f "$OKAL_HOME/scopes/default.json" ]; then
-        cat > "$OKAL_HOME/scopes/default.json" << 'EOF'
+  # ── default scope ─────────────────────────────────────────────────────────
+  mkdir -p "$HOME/.okal/scopes" "$HOME/.okal/logs"
+  if [ ! -f "$HOME/.okal/scopes/default.json" ]; then
+    cat > "$HOME/.okal/scopes/default.json" <<'JSON'
 {
   "allowedNetworks": ["127.0.0.1/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
   "allowedDomains": ["localhost"],
@@ -178,109 +93,30 @@ setup_directories() {
   "maxScope": "cidr/24",
   "requireAuthorization": true
 }
-EOF
-    fi
-    
-    print_success "Directories created at $OKAL_HOME"
+JSON
+    ok "Default scope written to ~/.okal/scopes/default.json"
+  fi
+
+  echo
+  ok "OpenKaliClaude installed at $INSTALL_DIR"
+  echo
+  echo -e "${GREEN}Next steps:${NC}"
+  echo
+  echo "  cd $INSTALL_DIR"
+  echo
+  echo "  # 1. Log in with your Claude subscription (or set ANTHROPIC_API_KEY)"
+  echo "  npm run login"
+  echo
+  echo "  # 2. Run the agent"
+  echo "  npm run agent -- --provider anthropic --model claude-sonnet-4-6 -- \\"
+  echo "    \"scan 192.168.1.0/24 and report risky open ports\""
+  echo
+  echo "  # Local-model alternative (LM Studio):"
+  echo "  npm run agent -- --provider lmstudio --model qwen2.5-coder -- \\"
+  echo "    \"do a quick nmap scan of 10.0.0.5\""
+  echo
+  warn "Reminder: only scan systems you have written authorization to test."
+  echo
 }
 
-verify_installation() {
-    print_info "Verifying installation..."
-    
-    if command -v okal &> /dev/null; then
-        print_success "okal command is available"
-        okal --version 2>/dev/null || true
-    else
-        print_error "okal command not found in PATH"
-        return 1
-    fi
-    
-    # Verify tools
-    if command -v okal &> /dev/null; then
-        okal verify || print_warning "Some tools are missing"
-    fi
-}
-
-print_next_steps() {
-    echo ""
-    echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║  Installation Complete!                                      ║${NC}"
-    echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-    echo "Next steps:"
-    echo ""
-    echo "  1. Start OpenKaliClaude:"
-    echo "     okal"
-    echo ""
-    echo "  2. View available commands:"
-    echo "     okal --help"
-    echo ""
-    echo "  3. Install additional security tools:"
-    echo "     okal install all"
-    echo ""
-    echo "  4. Read the documentation:"
-    echo "     https://docs.openkaliclaude.com"
-    echo ""
-    echo -e "${YELLOW}⚠ Remember: Only use OpenKaliClaude on systems you own or have${NC}"
-    echo -e "${YELLOW}  explicit written permission to test!${NC}"
-    echo ""
-}
-
-# Main installation flow
-main() {
-    print_banner
-    
-    print_info "OpenKaliClaude Installer"
-    print_info "========================"
-    echo ""
-    
-    # Check prerequisites
-    check_prerequisites
-    echo ""
-    
-    # Ask for installation method
-    echo "Choose installation method:"
-    echo "  1) npm (recommended - fastest)"
-    echo "  2) From source (latest development version)"
-    echo ""
-    read -p "Enter choice [1-2]: " choice
-    
-    case $choice in
-        1)
-            install_with_npm
-            ;;
-        2)
-            install_from_source
-            ;;
-        *)
-            print_info "Defaulting to npm installation"
-            install_with_npm
-            ;;
-    esac
-    
-    echo ""
-    
-    # Setup directories
-    setup_directories
-    
-    echo ""
-    
-    # Ask about security tools
-    read -p "Install security tools? (y/N): " install_tools
-    if [[ $install_tools =~ ^[Yy]$ ]]; then
-        install_security_tools
-    fi
-    
-    echo ""
-    
-    # Verify installation
-    verify_installation
-    
-    echo ""
-    
-    # Print next steps
-    print_next_steps
-}
-
-# Run main function
 main "$@"

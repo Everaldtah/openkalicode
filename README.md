@@ -205,25 +205,49 @@ OpenKaliClaude is for **authorized** security testing only — penetration tests
 - **Kali-Linux tools** in `$PATH` (or use the Docker image): `nmap`, `nikto`, `sqlmap`, `hashcat`, `msfconsole`
 - Linux/macOS recommended; Windows works for the framework itself but most underlying tools assume a POSIX environment
 
-### Option A — From source
+### Option A — One-line installer (Linux / macOS / WSL)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Everaldtah/openkalicode/main/install.sh | bash
+```
+
+This clones the repo into `~/openkalicode`, runs `npm install --legacy-peer-deps`, writes a default scope to `~/.okal/scopes/default.json`, and prints the next-step commands. Override the install location with `OKAL_INSTALL_DIR=/opt/okal`.
+
+### Option B — One-line installer (Windows / PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/Everaldtah/openkalicode/main/install.ps1 | iex
+```
+
+Same as above, into `$HOME\openkalicode`. Override with `$env:OKAL_INSTALL_DIR`.
+
+### Option C — Manual checkout
 
 ```bash
 git clone https://github.com/Everaldtah/openkalicode.git
 cd openkalicode
-npm install
-npm run build
-./bin/okal --help
+npm install --legacy-peer-deps
+npm run login                    # interactive Claude subscription / OAuth login
+npm run agent -- --help
 ```
 
-### Option B — Helper installer
+> **Why `--legacy-peer-deps`?** The Claude Agent SDK currently peer-depends on Zod v4 while the rest of the project still uses Zod v3. The runtime is unaffected; npm just needs the flag to accept the mismatch. This will go away once the project bumps to Zod v4.
+>
+> **Why no `npm run build`?** The agent runs through `tsx` directly (no compile step required). The `npm run build` script is left for users who want to ship a compiled `dist/` artifact, but it isn't needed to use the agent.
+
+### Logging in with your Claude subscription
+
+OpenKaliClaude does not handle credentials itself — it delegates to the Claude CLI bundled inside `@anthropic-ai/claude-agent-sdk`. The `npm run login` script (or `bin/okal-login`) is just a thin wrapper around it:
 
 ```bash
-./install.sh                    # installs Node deps + builds
-npm run install:tools           # installs the underlying security binaries
-npm run verify:tools            # sanity-checks each binary
+npm run login                    # interactive OAuth flow — opens a browser
+npm run login -- setup-token     # alternative: paste a long-lived token
+npm run login -- logout          # clear cached credentials
 ```
 
-### Option C — Docker (recommended for isolation)
+After login, the SDK reads cached credentials from your user profile and bills inference against your **Claude Pro / Team / Enterprise** subscription. To bill via the Anthropic API instead, just set `ANTHROPIC_API_KEY` and skip `npm run login` entirely.
+
+### Option D — Docker (recommended for isolation)
 
 ```bash
 npm run docker:build

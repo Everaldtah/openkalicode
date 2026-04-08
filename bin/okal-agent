@@ -1,5 +1,29 @@
 #!/usr/bin/env node
-import('../dist/agent/cli.mjs').catch(err => {
-  console.error('Failed to launch okal-agent:', err)
-  process.exit(1)
+/**
+ * okal-agent — launcher
+ *
+ * Runs src/agent/cli.ts through tsx so users don't need a tsc build step.
+ * (The TypeScript code under src/ uses NodeNext .js import suffixes, which
+ * tsx resolves transparently to .ts files.)
+ */
+import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import { dirname, resolve } from 'node:path'
+
+const here = dirname(fileURLToPath(import.meta.url))
+const repoRoot = resolve(here, '..')
+const tsxBin = resolve(repoRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'tsx.cmd' : 'tsx')
+const entry = resolve(repoRoot, 'src', 'agent', 'cli.ts')
+
+// On Windows, .cmd shims can only be invoked via the shell. Elsewhere we
+// keep shell:false to avoid argument-quoting surprises.
+const isWin = process.platform === 'win32'
+const result = spawnSync(tsxBin, [entry, ...process.argv.slice(2)], {
+  stdio: 'inherit',
+  shell: isWin
 })
+if (result.error) {
+  console.error('[okal-agent] failed to spawn tsx:', result.error.message)
+  process.exit(1)
+}
+process.exit(result.status ?? 1)

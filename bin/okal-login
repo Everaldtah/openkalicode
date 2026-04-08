@@ -1,0 +1,39 @@
+#!/usr/bin/env node
+/**
+ * okal-login — Claude subscription login wrapper
+ *
+ * The Anthropic agent provider uses @anthropic-ai/claude-agent-sdk, which
+ * reads cached OAuth credentials from the same place as the official
+ * `claude` CLI (Claude Code). The SDK ships that CLI bundled, so we just
+ * forward to it for `login`, `logout`, and `setup-token`.
+ *
+ * Usage:
+ *   okal-login                 # interactive subscription / OAuth login
+ *   okal-login setup-token     # alternative: paste a long-lived token
+ *   okal-login logout          # clear cached credentials
+ *   okal-login --help
+ */
+import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import { dirname, resolve } from 'node:path'
+import { existsSync } from 'node:fs'
+
+const here = dirname(fileURLToPath(import.meta.url))
+const repoRoot = resolve(here, '..')
+const claudeCli = resolve(repoRoot, 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'cli.js')
+
+if (!existsSync(claudeCli)) {
+  console.error('[okal-login] Claude CLI not found at:', claudeCli)
+  console.error('[okal-login] Run `npm install --legacy-peer-deps` from the repo root first.')
+  process.exit(1)
+}
+
+// Default to `login` if the user passed no subcommand
+const args = process.argv.slice(2)
+if (args.length === 0) args.push('login')
+
+const result = spawnSync(process.execPath, [claudeCli, ...args], {
+  stdio: 'inherit',
+  shell: false
+})
+process.exit(result.status ?? 1)
