@@ -273,6 +273,51 @@ Add to your MCP client config:
 
 The model will see one tool per registered scanner, with the input schema, category, and legal warnings inlined into the description.
 
+### Agent mode (`okal-agent`)
+
+OpenKaliClaude ships an agent runtime that lets a model autonomously drive the security tools while staying inside your scope policy. Two providers are supported:
+
+| Provider | Auth | Default endpoint | Notes |
+|---|---|---|---|
+| `anthropic` | Claude subscription via prior `claude login` **or** `ANTHROPIC_API_KEY` | api.anthropic.com | Uses `@anthropic-ai/claude-agent-sdk`, identical auth to Claude Code |
+| `lmstudio` | none | `http://localhost:1234/v1` | OpenAI-compatible, tool calling |
+| `ollama` | none | `http://localhost:11434/v1` | OpenAI-compatible, tool calling |
+| `custom` | optional | `http://localhost:8000/v1` | Any other OpenAI-compatible server |
+
+```bash
+# 1) Anthropic with your Claude subscription (no API key needed if logged in)
+okal-agent --provider anthropic --model claude-sonnet-4-6 -- \
+  "scan 192.168.1.0/24 and tell me which open ports look risky"
+
+# 2) Anthropic with explicit API key (pay-as-you-go)
+ANTHROPIC_API_KEY=sk-ant-... okal-agent --provider anthropic \
+  --model claude-opus-4-6 -- "audit http://192.168.56.101 with nikto then sqlmap"
+
+# 3) LM Studio — load a tool-calling model (e.g. Qwen2.5-Coder) first
+okal-agent --provider lmstudio --model qwen2.5-coder -- \
+  "do a quick nmap scan of 10.0.0.5"
+
+# 4) Ollama
+okal-agent --provider ollama --model llama3.1:8b -- \
+  "check 192.168.1.10 for open ports"
+
+# 5) Tighten the scope for this session
+okal-agent --provider anthropic --model claude-sonnet-4-6 \
+  --scope '{"allowedNetworks":["10.10.0.0/16"],"allowedDomains":["*.lab.internal"],"excludedNetworks":[],"excludedDomains":[],"maxScope":"cidr/16","requireAuthorization":true}' \
+  -- "enumerate the lab subnet"
+```
+
+**How auth works for the Anthropic provider:** OpenKaliClaude does not handle credentials itself. The Claude Agent SDK reads them in this order:
+
+1. Cached OAuth credentials from `claude login` (your Claude Pro / Team / Enterprise subscription).
+2. `ANTHROPIC_API_KEY` environment variable.
+
+If neither is present, the SDK prints a login prompt. You can switch between subscription and API billing at any time just by setting/unsetting `ANTHROPIC_API_KEY`.
+
+**Local models:** any model that supports OpenAI-style `tools` / `tool_choice` works. Recommended starting points: Qwen2.5-Coder, Llama 3.1 Instruct (8B+), Mistral-Nemo. Smaller models often misuse tools — give them tighter prompts and lower `--max-turns`.
+
+**Safety:** the agent runtime registers *only* the OpenKaliClaude security tools. Built-in file/bash/web-fetch tools from the Claude Agent SDK are disabled, so the model cannot shell out around the scope and argument-injection guards.
+
 ### As a library
 
 ```ts
