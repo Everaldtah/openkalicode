@@ -12,7 +12,7 @@
  * No credentials are read or stored by OpenKaliClaude itself.
  */
 
-import { AgentToolContext, buildAnthropicMcpServer } from './tools.js'
+import { AgentToolContext, buildAnthropicMcpServer, buildAgentSystemPrompt } from './tools.js'
 
 export interface AnthropicAgentOptions {
   prompt: string
@@ -22,22 +22,21 @@ export interface AnthropicAgentOptions {
   ctx: AgentToolContext
 }
 
-const DEFAULT_SYSTEM_PROMPT = `You are OpenKaliClaude, an authorized security testing assistant. \
-You have access to vetted Kali-Linux security tools (nmap, nikto, sqlmap, hashcat, metasploit) \
-that can ONLY operate against targets inside the user's pre-declared scope. \
-Always start with the least invasive tool, prefer dryRun first when unsure, \
-and explain findings with clear remediation guidance.`
-
 export async function runAnthropicAgent(opts: AnthropicAgentOptions): Promise<void> {
   const { query } = await import('@anthropic-ai/claude-agent-sdk')
 
   const mcpServer = await buildAnthropicMcpServer(opts.ctx)
 
+  // Generate the system prompt from the live tool registry every run, so the
+  // model is always told exactly which security tools it has — never a stale
+  // hardcoded list.
+  const systemPrompt = opts.systemPrompt || buildAgentSystemPrompt(opts.ctx.scope)
+
   const response = query({
     prompt: opts.prompt,
     options: {
       model: opts.model,                       // SDK falls back to its default if undefined
-      systemPrompt: opts.systemPrompt || DEFAULT_SYSTEM_PROMPT,
+      systemPrompt,
       maxTurns: opts.maxTurns ?? 20,
       mcpServers: { 'openkaliclaude-security': mcpServer },
       // Allow only our security tools — block file/bash/web fetch from the

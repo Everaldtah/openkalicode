@@ -19,7 +19,7 @@
  *     (or maxTurns is reached)
  */
 
-import { AgentToolContext, buildOpenAITools, dispatchToolCall } from './tools.js'
+import { AgentToolContext, buildOpenAITools, dispatchToolCall, buildAgentSystemPrompt } from './tools.js'
 
 export type LocalProvider = 'lmstudio' | 'ollama' | 'custom'
 
@@ -40,11 +40,6 @@ const DEFAULT_BASE_URLS: Record<LocalProvider, string> = {
   custom:   'http://localhost:8000/v1'
 }
 
-const DEFAULT_SYSTEM_PROMPT = `You are OpenKaliClaude, an authorized security testing assistant. \
-You have access to vetted Kali-Linux security tools (nmap, nikto, sqlmap, hashcat, metasploit). \
-Targets are restricted by a scope policy enforced outside your control — do not try to bypass it. \
-Prefer the least invasive tool first, and use dryRun when unsure.`
-
 export async function runLocalAgent(opts: LocalAgentOptions): Promise<void> {
   const { default: OpenAI } = await import('openai')
 
@@ -55,8 +50,11 @@ export async function runLocalAgent(opts: LocalAgentOptions): Promise<void> {
   })
 
   const tools = buildOpenAITools()
+  // System prompt is generated from the live tool registry so the model
+  // is always told exactly which security tools it has available.
+  const systemPrompt = opts.systemPrompt || buildAgentSystemPrompt(opts.ctx.scope)
   const messages: Array<Record<string, unknown>> = [
-    { role: 'system', content: opts.systemPrompt || DEFAULT_SYSTEM_PROMPT },
+    { role: 'system', content: systemPrompt },
     { role: 'user',   content: opts.prompt }
   ]
 

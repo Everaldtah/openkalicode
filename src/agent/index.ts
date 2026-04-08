@@ -6,4 +6,4 @@
 
 export { runAnthropicAgent, type AnthropicAgentOptions } from './anthropic.js'
 export { runLocalAgent, type LocalAgentOptions, type LocalProvider } from './local.js'
-export { buildOpenAITools, buildAnthropicMcpServer, dispatchToolCall, type AgentToolContext } from './tools.js'
+export { buildOpenAITools, buildAnthropicMcpServer, dispatchToolCall, buildAgentSystemPrompt, type AgentToolContext } from './tools.js'
