@@ -6,6 +6,7 @@
 import { z } from 'zod'
 import { spawn } from 'child_process'
 import { SecurityTool, createFinding } from '../base/SecurityTool.js'
+import { TargetValidator } from '../base/TargetValidator.js'
 import { SecurityReport, Finding, ToolProgress } from '../../../types/security.js'
 
 const SqlmapInputSchema = z.object({
@@ -122,6 +123,18 @@ export class SqlmapTool extends SecurityTool<typeof SqlmapInputSchema, SqlmapOut
   }
   
   private buildArgs(input: SqlmapInput): string[] {
+    // Argument-injection guards
+    TargetValidator.assertSafeArg(input.target, 'target')
+    if (input.data) TargetValidator.assertSafeArg(input.data, 'data')
+    if (input.cookie) TargetValidator.assertSafeArg(input.cookie, 'cookie')
+    TargetValidator.assertSafeArg(input.techniques, 'techniques')
+    if (input.headers) {
+      for (const [k, v] of Object.entries(input.headers)) {
+        TargetValidator.assertSafeArg(k, 'header name')
+        TargetValidator.assertSafeArg(v, 'header value')
+      }
+    }
+
     const args: string[] = ['-u', input.target, '--batch']
     
     if (input.method === 'POST' && input.data) {

@@ -6,6 +6,7 @@
 import { z } from 'zod'
 import { spawn } from 'child_process'
 import { SecurityTool, createFinding } from '../base/SecurityTool.js'
+import { TargetValidator } from '../base/TargetValidator.js'
 import { SecurityReport, Finding, ToolProgress } from '../../../types/security.js'
 
 const HashcatInputSchema = z.object({
@@ -138,6 +139,15 @@ export class HashcatTool extends SecurityTool<typeof HashcatInputSchema, Hashcat
   }
   
   private buildArgs(input: HashcatInput): string[] {
+    // Argument-injection guards: any user-supplied path/string that would
+    // otherwise land at a positional slot must not look like a flag.
+    TargetValidator.assertSafeArg(input.hashFile, 'hashFile')
+    if (input.wordlist) TargetValidator.assertSafeArg(input.wordlist, 'wordlist')
+    if (input.mask) TargetValidator.assertSafeArg(input.mask, 'mask')
+    if (input.outputFile) TargetValidator.assertSafeArg(input.outputFile, 'outputFile')
+    if (input.charset) TargetValidator.assertSafeArg(input.charset, 'charset')
+    if (input.rules) input.rules.forEach(r => TargetValidator.assertSafeArg(r, 'rules'))
+
     const args: string[] = ['-m', input.hashType.toString()]
     
     // Attack mode

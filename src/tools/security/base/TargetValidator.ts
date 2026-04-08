@@ -76,12 +76,31 @@ export class TargetValidator {
   private ipInCidr(ip: string, cidr: string): boolean {
     const [cidrIp, bits] = cidr.split('/')
     const mask = parseInt(bits, 10)
-    
-    const ipNum = this.ipToNumber(ip)
-    const cidrNum = this.ipToNumber(cidrIp)
-    const maskNum = -1 << (32 - mask)
-    
+    if (isNaN(mask) || mask < 0 || mask > 32) return false
+    if (!this.isValidIp(ip) || !this.isValidIp(cidrIp)) return false
+
+    const ipNum = this.ipToNumber(ip) >>> 0
+    const cidrNum = this.ipToNumber(cidrIp) >>> 0
+    // /0 matches everything; avoid JS shift-count mod-32 wraparound at shift=32
+    const maskNum = mask === 0 ? 0 : (0xFFFFFFFF << (32 - mask)) >>> 0
+
     return (ipNum & maskNum) === (cidrNum & maskNum)
+  }
+
+  /**
+   * Reject CLI argument injection: values that look like flags or contain
+   * shell-meaningful control characters. Used by tool wrappers before exec.
+   */
+  static assertSafeArg(value: string, fieldName = 'argument'): void {
+    if (typeof value !== 'string' || value.length === 0) {
+      throw new Error(`Invalid ${fieldName}: must be a non-empty string`)
+    }
+    if (value.startsWith('-')) {
+      throw new Error(`Invalid ${fieldName}: values beginning with '-' are not allowed (argument injection guard)`)
+    }
+    if (/[\r\n\0]/.test(value)) {
+      throw new Error(`Invalid ${fieldName}: control characters are not allowed`)
+    }
   }
   
   /**

@@ -7,6 +7,7 @@ import { z } from 'zod'
 import { spawn } from 'child_process'
 import { XMLParser } from 'fast-xml-parser'
 import { SecurityTool, createFinding } from '../base/SecurityTool.js'
+import { TargetValidator } from '../base/TargetValidator.js'
 import { 
   SecurityReport, 
   ToolProgress,
@@ -227,6 +228,16 @@ export class NmapTool extends SecurityTool<typeof NmapInputSchema, NmapOutput, N
   }
   
   private buildArgs(input: NmapInput): string[] {
+    // Argument-injection guards: reject values that would be parsed as flags
+    TargetValidator.assertSafeArg(input.target, 'target')
+    if (input.ports) TargetValidator.assertSafeArg(input.ports, 'ports')
+    if (input.sourceIp) TargetValidator.assertSafeArg(input.sourceIp, 'sourceIp')
+    if (input.interface) TargetValidator.assertSafeArg(input.interface, 'interface')
+    if (input.hostTimeout) TargetValidator.assertSafeArg(input.hostTimeout, 'hostTimeout')
+    if (input.scanDelay) TargetValidator.assertSafeArg(input.scanDelay, 'scanDelay')
+    if (input.scripts) input.scripts.forEach(s => TargetValidator.assertSafeArg(s, 'scripts'))
+    if (input.exclude) input.exclude.forEach(s => TargetValidator.assertSafeArg(s, 'exclude'))
+
     const args: string[] = []
     
     // Add scan type options

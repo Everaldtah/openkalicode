@@ -6,6 +6,7 @@
 import { z } from 'zod'
 import { spawn } from 'child_process'
 import { SecurityTool, createFinding } from '../base/SecurityTool.js'
+import { TargetValidator } from '../base/TargetValidator.js'
 import { SecurityReport, Finding, ToolProgress } from '../../../types/security.js'
 
 const NiktoInputSchema = z.object({
@@ -118,6 +119,13 @@ export class NiktoTool extends SecurityTool<typeof NiktoInputSchema, NiktoOutput
   }
   
   private buildArgs(input: NiktoInput): string[] {
+    // Argument-injection guards
+    TargetValidator.assertSafeArg(input.target, 'target')
+    if (input.tuning) TargetValidator.assertSafeArg(input.tuning, 'tuning')
+    if (input.maxTime) TargetValidator.assertSafeArg(input.maxTime, 'maxTime')
+    if (input.plugins) input.plugins.forEach(p => TargetValidator.assertSafeArg(p, 'plugins'))
+    if (input.cgidirs) input.cgidirs.forEach(c => TargetValidator.assertSafeArg(c, 'cgidirs'))
+
     const args: string[] = ['-h', input.target]
     
     if (input.port !== 80 && input.port !== 443) {
