@@ -1,0 +1,144 @@
+# OpenKaliClaude Dockerfile
+# Based on Kali Linux with all security tools pre-installed
+
+FROM kalilinux/kali-rolling:latest
+
+LABEL maintainer="OpenKaliClaude Team"
+LABEL version="2.0.0"
+LABEL description="OpenKaliClaude - AI-Powered Cybersecurity CLI"
+
+# Prevent interactive prompts during installation
+ENV DEBIAN_FRONTEND=noninteractive
+ENV OKAL_SECURE_MODE=1
+
+# Update and install base dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    wget \
+    git \
+    build-essential \
+    python3 \
+    python3-pip \
+    python3-venv \
+    ruby \
+    ruby-dev \
+    nodejs \
+    npm \
+    golang \
+    cargo \
+    cmake \
+    pkg-config \
+    libssl-dev \
+    libffi-dev \
+    libxml2-dev \
+    libxslt1-dev \
+    libyaml-dev \
+    zlib1g-dev \
+    libpq-dev \
+    libpcap-dev \
+    libsqlite3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Kali Linux headless tools (core security tools)
+RUN apt-get update && apt-get install -y \
+    kali-linux-headless \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install specific security tools
+RUN apt-get update && apt-get install -y \
+    nmap \
+    nikto \
+    sqlmap \
+    hashcat \
+    hashcat-data \
+    john \
+    hydra \
+    gobuster \
+    dirb \
+    wpscan \
+    masscan \
+    exploitdb \
+    metasploit-framework \
+    aircrack-ng \
+    reaver \
+    wireshark \
+    tshark \
+    tcpdump \
+    netcat-traditional \
+    ncat \
+    socat \
+    proxychains4 \
+    tor \
+    openvpn \
+    enum4linux \
+    ldap-utils \
+    snmp \
+    sslscan \
+    testssl.sh \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install cloud security tools
+RUN apt-get update && apt-get install -y \
+    awscli \
+    azure-cli \
+    google-cloud-sdk \
+    docker.io \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install container security tools
+RUN curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+
+# Create OpenKaliClaude user
+RUN useradd -m -s /bin/bash -G sudo,docker okal
+
+# Set up OpenKaliClaude directory
+RUN mkdir -p /opt/openkaliclaude && chown okal:okal /opt/openkaliclaude
+
+# Copy OpenKaliClaude source
+COPY --chown=okal:okal . /opt/openkaliclaude/
+
+# Install Node.js dependencies and build
+WORKDIR /opt/openkaliclaude
+RUN npm install && npm run build
+
+# Create symlinks for CLI commands
+RUN ln -sf /opt/openkaliclaude/bin/okal /usr/local/bin/okal && \
+    ln -sf /opt/openkaliclaude/bin/openkaliclaude /usr/local/bin/openkaliclaude && \
+    ln -sf /opt/openkaliclaude/bin/okcli /usr/local/bin/okcli
+
+# Set up Metasploit database
+RUN service postgresql start && \
+    msfdb init && \
+    service postgresql stop
+
+# Create startup script
+RUN echo '#!/bin/bash\n\
+service postgresql start 2>/dev/null || true\n\
+service docker start 2>/dev/null || true\n\
+exec "$@"' > /usr/local/bin/okal-startup && \
+    chmod +x /usr/local/bin/okal-startup
+
+# Security hardening
+RUN chmod 750 /opt/openkaliclaude && \
+    chmod -R 755 /opt/openkaliclaude/bin && \
+    chmod -R 755 /opt/openkaliclaude/dist
+
+# Switch to non-root user
+USER okal
+WORKDIR /home/okal
+
+# Set environment variables
+ENV PATH="/usr/local/bin:/opt/openkaliclaude/bin:$PATH"
+ENV OKAL_HOME="/home/okal/.okal"
+ENV OKAL_AUDIT="true"
+
+# Create OKAL home directory
+RUN mkdir -p /home/okal/.okal
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD okal --version || exit 1
+
+# Default entrypoint
+ENTRYPOINT ["/usr/local/bin/okal-startup"]
+CMD ["okal"]

@@ -1,0 +1,97 @@
+# OpenKaliClaude Docker Compose
+# Run OpenKaliClaude with all dependencies
+
+version: '3.8'
+
+services:
+  openkaliclaude:
+    build:
+      context: ..
+      dockerfile: container/Dockerfile.kali
+    image: openkaliclaude:latest
+    container_name: openkaliclaude
+    
+    # Interactive mode
+    stdin_open: true
+    tty: true
+    
+    # Network configuration
+    network_mode: host
+    
+    # Privileged mode for security tools
+    privileged: true
+    
+    # Capabilities for specific tools
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_ADMIN
+      - SYS_PTRACE
+    
+    # Volumes
+    volumes:
+      # Persist data
+      - okal-data:/home/okal/.okal
+      # Share with host
+      - ./shared:/shared
+      # Docker socket for container scanning
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    
+    # Environment variables
+    environment:
+      - OKAL_AUDIT=true
+      - OKAL_SECURE_MODE=1
+      - OKAL_SCOPE=${OKAL_SCOPE:-"{\"allowedNetworks\":[\"127.0.0.1/8\",\"10.0.0.0/8\",\"172.16.0.0/12\",\"192.168.0.0/16\"]}"}
+    
+    # Working directory
+    working_dir: /home/okal
+    
+    # Command
+    command: okal
+    
+    # Logging
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    # Restart policy
+    restart: unless-stopped
+
+  # Optional: PostgreSQL for Metasploit
+  postgres:
+    image: postgres:15-alpine
+    container_name: okal-postgres
+    environment:
+      POSTGRES_USER: msf
+      POSTGRES_PASSWORD: msf
+      POSTGRES_DB: msf
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - okal-network
+    restart: unless-stopped
+    profiles:
+      - with-db
+
+  # Optional: Redis for caching
+  redis:
+    image: redis:7-alpine
+    container_name: okal-redis
+    volumes:
+      - redis-data:/data
+    networks:
+      - okal-network
+    restart: unless-stopped
+    profiles:
+      - with-cache
+
+volumes:
+  okal-data:
+  postgres-data:
+  redis-data:
+
+networks:
+  okal-network:
+    driver: bridge

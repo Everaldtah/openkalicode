@@ -1,0 +1,58 @@
+#!/usr/bin/env node
+/**
+ * OpenKaliClaude CLI Entry Point
+ * Main executable for the okal command
+ */
+
+import { fileURLToPath } from 'url'
+import { dirname, join } from 'path'
+import { spawn } from 'child_process'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = dirname(__filename)
+
+// Determine if we're in development or production
+const isDev = process.env.OKAL_DEV === '1'
+
+// Path to the CLI script
+const cliPath = isDev 
+  ? join(__dirname, '..', 'src', 'cli', 'index.tsx')
+  : join(__dirname, '..', 'dist', 'cli', 'index.mjs')
+
+// Security warning banner
+const SECURITY_WARNING = `
+╔══════════════════════════════════════════════════════════════════╗
+║  OpenKaliClaude v2.0.0 - AI-Powered Cybersecurity Framework      ║
+║                                                                  ║
+║  WARNING: This tool is for authorized security testing ONLY      ║
+║  Unauthorized access to computer systems is ILLEGAL              ║
+║  Ensure you have explicit written permission before scanning     ║
+║                                                                  ║
+║  By using this software, you accept full legal responsibility    ║
+╚══════════════════════════════════════════════════════════════════╝
+`
+
+// Show warning in certain modes
+if (process.env.OKAL_SECURE_MODE === '1' || process.argv.includes('--secure')) {
+  console.error(SECURITY_WARNING)
+}
+
+// Run the CLI
+if (isDev) {
+  // Use tsx for TypeScript execution in development
+  const tsx = spawn('npx', ['tsx', cliPath, ...process.argv.slice(2)], {
+    stdio: 'inherit',
+    env: process.env
+  })
+  
+  tsx.on('close', (code) => {
+    process.exit(code || 0)
+  })
+} else {
+  // Run compiled JavaScript
+  import(cliPath).catch((error) => {
+    console.error('Failed to start OpenKaliClaude:', error.message)
+    console.error('Make sure to run "npm run build" first')
+    process.exit(1)
+  })
+}
