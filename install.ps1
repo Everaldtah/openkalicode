@@ -65,6 +65,20 @@ npm install --legacy-peer-deps
 if ($LASTEXITCODE -ne 0) { Fail 'npm install failed' }
 Ok 'Dependencies installed'
 
+# ── register global commands ─────────────────────────────────────────────────
+# `npm link` writes shims for every entry in package.json's "bin" field into
+# npm's global bin directory ($env:APPDATA\npm by default, which Node.js
+# installers add to PATH automatically). After this, the user can type
+# `openkaliclaude` from any PowerShell prompt — same UX as `claude`, `kimi`,
+# and other harnessed CLIs.
+Info 'Linking global commands (openkaliclaude / okal-agent / okal-login)...'
+npm link
+if ($LASTEXITCODE -ne 0) {
+  Warn 'npm link failed. You can still run from this directory via: npm start'
+} else {
+  Ok 'Global commands installed'
+}
+
 # ── default scope ────────────────────────────────────────────────────────────
 $okalHome = Join-Path $HOME '.okal'
 New-Item -ItemType Directory -Force -Path (Join-Path $okalHome 'scopes') | Out-Null
@@ -90,18 +104,22 @@ Ok "OpenKaliClaude installed at $InstallDir"
 Write-Host ''
 Write-Host 'Next steps:' -ForegroundColor Green
 Write-Host ''
-Write-Host "  cd $InstallDir"
-Write-Host ''
 Write-Host '  # 1. Log in with your Claude subscription (or set $env:ANTHROPIC_API_KEY)'
-Write-Host '  npm run login'
+Write-Host '  okal-login'
 Write-Host ''
-Write-Host '  # 2. Run the agent'
-Write-Host '  npm run agent -- --provider anthropic --model claude-sonnet-4-6 -- `'
+Write-Host '  # 2. Launch the interactive agent (from any directory)'
+Write-Host '  openkaliclaude'
+Write-Host ''
+Write-Host '  # Or one-shot mode:'
+Write-Host '  okal-agent --provider anthropic --model claude-sonnet-4-6 -- `'
 Write-Host '    "scan 192.168.1.0/24 and report risky open ports"'
 Write-Host ''
 Write-Host '  # Local-model alternative (LM Studio):'
-Write-Host '  npm run agent -- --provider lmstudio --model qwen2.5-coder -- `'
-Write-Host '    "do a quick nmap scan of 10.0.0.5"'
+Write-Host '  openkaliclaude --provider lmstudio --model qwen2.5-coder'
+Write-Host ''
+Write-Host 'If `openkaliclaude` is not found after install, ensure that' -ForegroundColor Yellow
+Write-Host '  ' (npm config get prefix)
+Write-Host 'is on your PATH (Node installer normally adds it automatically).' -ForegroundColor Yellow
 Write-Host ''
 Warn 'Reminder: only scan systems you have written authorization to test.'
 Write-Host ''

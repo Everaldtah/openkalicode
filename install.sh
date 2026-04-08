@@ -69,7 +69,18 @@ main() {
   ok "Dependencies installed"
 
   # ── make bin/* executable ─────────────────────────────────────────────────
-  chmod +x bin/okal-agent bin/okal-login 2>/dev/null || true
+  chmod +x bin/openkaliclaude bin/okal-agent bin/okal-login 2>/dev/null || true
+
+  # ── register global commands ──────────────────────────────────────────────
+  # `npm link` puts shims for every entry in package.json's "bin" field into
+  # npm's global bin directory, so the user can just type `openkaliclaude`
+  # from anywhere — same UX as `claude`, `kimi`, etc.
+  info "Linking global commands (openkaliclaude / okal-agent / okal-login)…"
+  if npm link 2>/dev/null; then
+    ok "Global commands installed"
+  else
+    warn "npm link failed (may need sudo). You can still run via: cd $INSTALL_DIR && npm start"
+  fi
 
   # ── optional: security tools ──────────────────────────────────────────────
   if [ "${OKAL_SKIP_TOOLS:-0}" != "1" ]; then
@@ -102,18 +113,18 @@ JSON
   echo
   echo -e "${GREEN}Next steps:${NC}"
   echo
-  echo "  cd $INSTALL_DIR"
-  echo
   echo "  # 1. Log in with your Claude subscription (or set ANTHROPIC_API_KEY)"
-  echo "  npm run login"
+  echo "  okal-login"
   echo
-  echo "  # 2. Run the agent"
-  echo "  npm run agent -- --provider anthropic --model claude-sonnet-4-6 -- \\"
+  echo "  # 2. Launch the interactive agent (from any directory)"
+  echo "  openkaliclaude"
+  echo
+  echo "  # Or one-shot mode:"
+  echo "  okal-agent --provider anthropic --model claude-sonnet-4-6 -- \\"
   echo "    \"scan 192.168.1.0/24 and report risky open ports\""
   echo
   echo "  # Local-model alternative (LM Studio):"
-  echo "  npm run agent -- --provider lmstudio --model qwen2.5-coder -- \\"
-  echo "    \"do a quick nmap scan of 10.0.0.5\""
+  echo "  openkaliclaude --provider lmstudio --model qwen2.5-coder"
   echo
   warn "Reminder: only scan systems you have written authorization to test."
   echo

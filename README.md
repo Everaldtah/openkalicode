@@ -227,9 +227,12 @@ Same as above, into `$HOME\openkalicode`. Override with `$env:OKAL_INSTALL_DIR`.
 git clone https://github.com/Everaldtah/openkalicode.git
 cd openkalicode
 npm install --legacy-peer-deps
-npm run login                    # interactive Claude subscription / OAuth login
-npm run agent -- --help
+npm link                         # registers `openkaliclaude` / `okal-agent` / `okal-login` globally
+okal-login                       # interactive Claude subscription / OAuth login
+openkaliclaude                   # launch the branded REPL from any directory
 ```
+
+After `npm link`, the three commands are available system-wide just like `claude`, `kimi`, and other harnessed CLIs — they live in npm's global bin directory (`%APPDATA%\npm` on Windows, `/usr/local/bin` or `~/.npm-global/bin` on Linux/macOS), which the Node installer adds to PATH by default.
 
 > **Why `--legacy-peer-deps`?** The Claude Agent SDK currently peer-depends on Zod v4 while the rest of the project still uses Zod v3. The runtime is unaffected; npm just needs the flag to accept the mismatch. This will go away once the project bumps to Zod v4.
 >
