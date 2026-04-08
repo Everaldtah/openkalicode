@@ -1,13 +1,27 @@
 #!/usr/bin/env node
 /**
- * OpenKaliClaude CLI Entry Point (alias)
+ * openkaliclaude — interactive REPL launcher
+ *
+ * Renders the OpenKaliClaude branded front-end (banner + welcome box +
+ * chat loop) instead of the generic Claude Code CLI chrome. Runs the
+ * REPL through tsx so no compiled dist/ artifact is required.
  */
+import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import { dirname, resolve } from 'node:path'
 
-import { fileURLToPath } from 'url'
-import { dirname, join } from 'path'
+const here = dirname(fileURLToPath(import.meta.url))
+const repoRoot = resolve(here, '..')
+const isWin = process.platform === 'win32'
+const tsxBin = resolve(repoRoot, 'node_modules', '.bin', isWin ? 'tsx.cmd' : 'tsx')
+const entry = resolve(repoRoot, 'src', 'cli', 'repl.ts')
 
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = dirname(__filename)
-
-// Delegate to main okal binary
-import(join(__dirname, 'okal'))
+const result = spawnSync(tsxBin, [entry, ...process.argv.slice(2)], {
+  stdio: 'inherit',
+  shell: isWin
+})
+if (result.error) {
+  console.error('[openkaliclaude] failed to spawn tsx:', result.error.message)
+  process.exit(1)
+}
+process.exit(result.status ?? 1)

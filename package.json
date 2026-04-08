@@ -20,6 +20,7 @@
     "verify:tools": "node ./dist/scripts/verify-installation.mjs",
     "mcp:server": "tsx src/mcp/security-server.ts",
     "agent": "tsx src/agent/cli.ts",
+    "start": "tsx src/cli/repl.ts",
     "login": "node bin/okal-login",
     "docker:build": "docker build -f container/Dockerfile.kali -t openkaliclaude:latest .",
     "docker:run": "docker run -it --rm openkaliclaude:latest",
