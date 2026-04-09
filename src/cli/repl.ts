@@ -17,6 +17,10 @@ import { ScopeConstraint } from '../types/security.js'
 import { runAnthropicAgent } from '../agent/anthropic.js'
 import { runLocalAgent, LocalProvider } from '../agent/local.js'
 import { AgentToolContext } from '../agent/tools.js'
+import { showModelPicker } from './modelPicker.js'
+import { autoDetectLocal } from '../models/registry.js'
+import { MemoryManager } from '../memory/index.js'
+import { makeAnthropicSummarizer, makeOpenAISummarizer } from '../memory/summarizers.js'
 
 // ─── config from env / argv ──────────────────────────────────────────────────
 
@@ -91,6 +95,10 @@ Options:
 
 Slash commands (inside the REPL):
   /help               Show available slash commands
+  /models             Scrollable picker for Anthropic / OpenAI / LM Studio / Ollama
+  /local              Auto-detect and switch to a running LM Studio / Ollama model
+  /memory             Show persistent memory stats
+  /compact            Force context compaction now
   /tools              List installed security tools
   /scope              Show current scope policy
   /clear              Clear the screen
@@ -222,17 +230,68 @@ function renderHeader(cfg: ReplConfig): void {
 
 // ─── slash commands ──────────────────────────────────────────────────────────
 
-function handleSlash(line: string, cfg: ReplConfig): boolean {
-  const [cmd, ...rest] = line.trim().slice(1).split(/\s+/)
+async function handleSlash(line: string, cfg: ReplConfig, mem: MemoryManager): Promise<boolean> {
+  const [cmd, ..._rest] = line.trim().slice(1).split(/\s+/)
   switch (cmd) {
     case 'help':
       console.log(C.label('\nSlash commands:'))
-      console.log('  /help    Show this help')
-      console.log('  /tools   List installed security tools')
-      console.log('  /scope   Show current scope policy')
-      console.log('  /clear   Clear the screen')
-      console.log('  /exit    Quit\n')
+      console.log('  /help     Show this help')
+      console.log('  /models   Scrollable picker: Anthropic / OpenAI / LM Studio / Ollama')
+      console.log('  /local    Auto-detect running local model (LM Studio or Ollama)')
+      console.log('  /memory   Persistent memory stats + storage location')
+      console.log('  /compact  Force context compaction of the running session')
+      console.log('  /tools    List installed security tools')
+      console.log('  /scope    Show current scope policy')
+      console.log('  /clear    Clear the screen')
+      console.log('  /exit     Quit\n')
       return true
+    case 'models': {
+      const pick = await showModelPicker()
+      if (!pick) { console.log(C.dim('  (no change)\n')); return true }
+      cfg.provider = pick.provider === 'openai' ? 'custom' : pick.provider
+      cfg.model = pick.model
+      cfg.baseUrl = pick.baseUrl
+      console.log(C.ok(`  → switched to ${pick.label}`))
+      console.log(C.dim(`    provider=${cfg.provider} model=${cfg.model}${cfg.baseUrl ? ' baseUrl=' + cfg.baseUrl : ''}\n`))
+      return true
+    }
+    case 'local': {
+      console.log(C.dim('  probing LM Studio and Ollama…'))
+      const found = await autoDetectLocal()
+      if (!found) {
+        console.log(C.warn('  no local model detected. Start LM Studio or run `ollama serve`.\n'))
+        return true
+      }
+      cfg.provider = found.provider as LocalProvider
+      cfg.model = found.model
+      cfg.baseUrl = found.baseUrl
+      console.log(C.ok(`  → connected to ${found.label}`))
+      console.log(C.dim(`    provider=${cfg.provider} model=${cfg.model} baseUrl=${cfg.baseUrl}\n`))
+      return true
+    }
+    case 'memory': {
+      const s = mem.stats()
+      console.log(C.label('\nPersistent memory:'))
+      console.log(`  turns stored: ${C.text(String(s.turns))}`)
+      console.log(`  tokens (est): ${C.text(String(s.tokens))}`)
+      console.log(`  summary:      ${s.hasSummary ? C.ok('yes') : C.dim('none')}`)
+      console.log(C.dim(`  log:     ${s.locations.log}`))
+      console.log(C.dim(`  summary: ${s.locations.summary}\n`))
+      return true
+    }
+    case 'compact': {
+      const summarizer = cfg.provider === 'anthropic'
+        ? makeAnthropicSummarizer()
+        : makeOpenAISummarizer({
+            baseUrl: cfg.baseUrl || 'http://localhost:1234/v1',
+            apiKey: cfg.apiKey,
+            model: cfg.model
+          })
+      console.log(C.dim('  compacting…'))
+      const did = await mem.maybeCompact(summarizer)
+      console.log(did ? C.ok('  compaction complete.\n') : C.dim('  under budget — nothing to compact.\n'))
+      return true
+    }
     case 'tools': {
       // Lazy-import so this command works even before the SDKs warm up.
       import('../tools/security/index.js').then(({ securityTools }) => {
@@ -271,7 +330,7 @@ function handleSlash(line: string, cfg: ReplConfig): boolean {
 
 // ─── main loop ───────────────────────────────────────────────────────────────
 
-async function dispatchPrompt(prompt: string, cfg: ReplConfig): Promise<void> {
+async function dispatchPrompt(prompt: string, cfg: ReplConfig, mem: MemoryManager): Promise<void> {
   const ctx: AgentToolContext = {
     scope: cfg.scope,
     auditLog: cfg.audit,
@@ -279,12 +338,26 @@ async function dispatchPrompt(prompt: string, cfg: ReplConfig): Promise<void> {
     dryRun: false
   }
 
+  // Persist the user turn and inject memory preamble so the agent has
+  // cross-session context without paying for it in every prompt.
+  mem.recordUser(prompt)
+  const preamble = mem.buildPreamble()
+  const augmented = preamble ? `${preamble}\n${prompt}` : prompt
+
+  // Capture assistant output as it streams by hooking stdout.write.
+  let captured = ''
+  const origWrite = process.stdout.write.bind(process.stdout)
+  process.stdout.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
+    if (typeof chunk === 'string') captured += chunk
+    return origWrite(chunk as never, ...(rest as []))
+  }) as typeof process.stdout.write
+
   try {
     if (cfg.provider === 'anthropic') {
-      await runAnthropicAgent({ prompt, model: cfg.model, ctx })
+      await runAnthropicAgent({ prompt: augmented, model: cfg.model, ctx })
     } else {
       await runLocalAgent({
-        prompt,
+        prompt: augmented,
         provider: cfg.provider,
         model: cfg.model,
         baseUrl: cfg.baseUrl,
@@ -294,6 +367,25 @@ async function dispatchPrompt(prompt: string, cfg: ReplConfig): Promise<void> {
     }
   } catch (e) {
     console.error(C.err(`\n[error] ${(e as Error).message}\n`))
+  } finally {
+    process.stdout.write = origWrite
+  }
+
+  if (captured.trim()) mem.recordAssistant(captured.trim())
+
+  // Auto-compact after every turn — the compactor is a no-op when under budget.
+  try {
+    const summarizer = cfg.provider === 'anthropic'
+      ? makeAnthropicSummarizer()
+      : makeOpenAISummarizer({
+          baseUrl: cfg.baseUrl || 'http://localhost:1234/v1',
+          apiKey: cfg.apiKey,
+          model: cfg.model
+        })
+    const did = await mem.maybeCompact(summarizer)
+    if (did) console.error(C.dim('[memory] auto-compacted context'))
+  } catch (e) {
+    console.error(C.dim(`[memory] auto-compaction skipped: ${(e as Error).message}`))
   }
 }
 
@@ -301,6 +393,15 @@ async function main(): Promise<void> {
   const cfg = parseConfig()
   console.clear()
   renderHeader(cfg)
+
+  // Load persistent memory for this working directory. This is the
+  // "remember every conversation and code across sessions" feature — the
+  // store lives at ~/.config/openkaliclaude/memory/<project>.jsonl.
+  const mem = await MemoryManager.load()
+  const memStats = mem.stats()
+  if (memStats.turns > 0 || memStats.hasSummary) {
+    console.log(C.dim(`  memory: ${memStats.turns} turns, ~${memStats.tokens} tokens${memStats.hasSummary ? ' (+summary)' : ''}`))
+  }
 
   const rl = readline.createInterface({
     input: process.stdin,
@@ -327,14 +428,16 @@ async function main(): Promise<void> {
     if (!line) { rl.prompt(); continue }
 
     if (line.startsWith('/')) {
-      handleSlash(line, cfg)
+      rl.pause()
+      await handleSlash(line, cfg, mem)
+      rl.resume()
       rl.prompt()
       continue
     }
 
     console.log()                     // spacer before agent output
     rl.pause()
-    await dispatchPrompt(line, cfg)
+    await dispatchPrompt(line, cfg, mem)
     rl.resume()
     console.log()
     rl.prompt()
