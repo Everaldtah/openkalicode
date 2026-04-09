@@ -58,11 +58,19 @@ export class TargetValidator {
         return cidr === '127.0.0.1/8' || cidr === 'localhost'
       }
       
+      // Target is itself a CIDR — check subnet containment.
+      // Fixes: 192.168.1.0/24 should be accepted when allowed list contains
+      // 192.168.0.0/16. Previously `ipInCidr` bailed because a CIDR string
+      // isn't a valid IP, so well-formed subnet targets were rejected.
+      if (target.includes('/')) {
+        return cidr.includes('/') ? this.cidrInCidr(target, cidr) : false
+      }
+
       // Handle CIDR matching
       if (cidr.includes('/')) {
         return this.ipInCidr(target, cidr)
       }
-      
+
       // Exact match
       return target === cidr
     } catch {
@@ -85,6 +93,24 @@ export class TargetValidator {
     const maskNum = mask === 0 ? 0 : (0xFFFFFFFF << (32 - mask)) >>> 0
 
     return (ipNum & maskNum) === (cidrNum & maskNum)
+  }
+
+  /**
+   * Check if CIDR A is fully contained within CIDR B.
+   * A ⊆ B iff B's mask is ≤ A's mask AND A's network address falls inside B.
+   */
+  private cidrInCidr(aCidr: string, bCidr: string): boolean {
+    const [aIp, aBitsStr] = aCidr.split('/')
+    const [bIp, bBitsStr] = bCidr.split('/')
+    const aBits = parseInt(aBitsStr, 10)
+    const bBits = parseInt(bBitsStr, 10)
+    if (isNaN(aBits) || isNaN(bBits)) return false
+    if (!this.isValidIp(aIp) || !this.isValidIp(bIp)) return false
+    if (bBits > aBits) return false    // b is more specific → cannot contain a
+    const aNum = this.ipToNumber(aIp) >>> 0
+    const bNum = this.ipToNumber(bIp) >>> 0
+    const bMask = bBits === 0 ? 0 : (0xFFFFFFFF << (32 - bBits)) >>> 0
+    return (aNum & bMask) === (bNum & bMask)
   }
 
   /**

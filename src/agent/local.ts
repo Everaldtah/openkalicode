@@ -20,6 +20,36 @@
  */
 
 import { AgentToolContext, buildOpenAITools, dispatchToolCall, buildAgentSystemPrompt } from './tools.js'
+import { ThinkingStreamFilter, stripThinking } from '../util/thinkingFilter.js'
+
+/**
+ * Extra guardrails specifically for small OSS models (Qwen, Llama, DeepSeek…).
+ * Prepended to the normal system prompt. Fixes the top failure modes we've
+ * seen in practice:
+ *
+ *   - `<think>` reasoning leaking into the final answer and into memory
+ *   - calling tool names that don't exist ("test", "recon", etc.)
+ *   - retrying the same rejected call with trivial variations
+ *   - chain-calling 6 tools in a single turn
+ */
+const LOCAL_MODEL_RULES = `
+You are running on a local open-source LLM. Follow these rules STRICTLY:
+
+1. Never emit <think>, <reasoning>, or <thought> tags in your final output.
+   Do any internal reasoning silently. The user only sees your final answer.
+2. Only call tools whose names appear in the provided tool list. If the tool
+   you want does not exist, say so in text — do not invent tool names.
+3. Call AT MOST ONE tool per turn, then stop and wait for the result. Read the
+   result carefully before deciding the next step.
+4. If a tool returns a scope / authorization error, do NOT retry with the same
+   family of targets (10.x, 172.16.x, 192.168.x). Read the error message —
+   it tells you exactly which networks are allowed. Pick a target that is
+   contained in one of them, or ask the user to widen scope.
+5. If a tool reports "not installed", do NOT retry it. Tell the user and
+   suggest the install command, or fall back to a different tool.
+6. Be terse. No preamble, no chain-of-thought narration, no trailing recap.
+`.trim()
+
 
 export type LocalProvider = 'lmstudio' | 'ollama' | 'custom'
 
@@ -50,15 +80,23 @@ export async function runLocalAgent(opts: LocalAgentOptions): Promise<void> {
   })
 
   const tools = buildOpenAITools()
-  // System prompt is generated from the live tool registry so the model
-  // is always told exactly which security tools it has available.
-  const systemPrompt = opts.systemPrompt || buildAgentSystemPrompt(opts.ctx.scope)
+  // Prepend local-model guardrails to the normal system prompt so small OSS
+  // models don't leak <think> blocks, hallucinate tool names, or hammer the
+  // scope validator in a retry loop.
+  const baseSystem = opts.systemPrompt || buildAgentSystemPrompt(opts.ctx.scope)
+  const systemPrompt = `${LOCAL_MODEL_RULES}\n\n${baseSystem}`
   const messages: Array<Record<string, unknown>> = [
     { role: 'system', content: systemPrompt },
     { role: 'user',   content: opts.prompt }
   ]
 
-  const maxTurns = opts.maxTurns ?? 20
+  // Local models loop more than Claude when confused. 8 turns is plenty for
+  // a focused task; anything more and the model is almost certainly lost.
+  const maxTurns = opts.maxTurns ?? 8
+
+  // One filter per invocation: strip reasoning tags from any assistant text
+  // before it hits the user's terminal OR the persistent memory log.
+  const thinkFilter = new ThinkingStreamFilter()
 
   for (let turn = 0; turn < maxTurns; turn++) {
     const response = await client.chat.completions.create({
@@ -73,7 +111,11 @@ export async function runLocalAgent(opts: LocalAgentOptions): Promise<void> {
     messages.push(msg as never)
 
     if (msg.content) {
-      process.stdout.write(msg.content + '\n')
+      // Strip <think> blocks before display and rewrite the message in the
+      // transcript so future turns don't re-include the reasoning.
+      const cleaned = stripThinking(thinkFilter.feed(msg.content) + thinkFilter.flush())
+      if (cleaned) process.stdout.write(cleaned + '\n')
+      ;(msg as { content?: string }).content = cleaned
     }
 
     const toolCalls = (msg as { tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }> }).tool_calls

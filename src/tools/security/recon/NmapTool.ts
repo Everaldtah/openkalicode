@@ -175,6 +175,15 @@ export class NmapTool extends SecurityTool<typeof NmapInputSchema, NmapOutput, N
     
     return new Promise((resolve, reject) => {
       const process = spawn(cmd[0], cmd.slice(1))
+      // Prevent ENOENT (binary missing) from crashing the REPL as an
+      // unhandled 'error' event. Bubble it up as a tool error instead.
+      process.on('error', (err: NodeJS.ErrnoException) => {
+        reject(new Error(
+          err.code === 'ENOENT'
+            ? `nmap is not installed on this host. Install it (apt install nmap / choco install nmap) or switch to a Kali/WSL environment.`
+            : `failed to spawn nmap: ${err.message}`
+        ))
+      })
       let output = ''
       let stderr = ''
       let progress: NmapProgress = {

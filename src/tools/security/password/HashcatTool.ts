@@ -105,6 +105,11 @@ export class HashcatTool extends SecurityTool<typeof HashcatInputSchema, Hashcat
     
     return new Promise((resolve, reject) => {
       const process = spawn('hashcat', args)
+      process.on('error', (err: NodeJS.ErrnoException) => {
+        reject(new Error(err.code === 'ENOENT'
+          ? 'hashcat is not installed on this host.'
+          : `failed to spawn hashcat: ${err.message}`))
+      })
       let output = ''
       let stderr = ''
       let progress: HashcatProgress = {

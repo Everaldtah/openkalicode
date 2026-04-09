@@ -90,6 +90,11 @@ export class SqlmapTool extends SecurityTool<typeof SqlmapInputSchema, SqlmapOut
     
     return new Promise((resolve, reject) => {
       const process = spawn('sqlmap', args)
+      process.on('error', (err: NodeJS.ErrnoException) => {
+        reject(new Error(err.code === 'ENOENT'
+          ? 'sqlmap is not installed on this host.'
+          : `failed to spawn sqlmap: ${err.message}`))
+      })
       let output = ''
       let stderr = ''
       let progress: SqlmapProgress = {

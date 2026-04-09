@@ -65,9 +65,11 @@ export abstract class SecurityTool<Input extends z.ZodTypeAny, Output, Progress 
     if (target) {
       const isAuthorized = await this.validator.isAuthorized(target, context.scopeConstraint)
       if (!isAuthorized) {
+        const allowed = context.scopeConstraint.allowedNetworks.join(', ') || '(none)'
+        const denied  = context.scopeConstraint.excludedNetworks.join(', ') || '(none)'
         return {
           granted: false,
-          reason: `Target '${target}' is not within authorized scope`,
+          reason: `Target '${target}' is not within authorized scope. allowedNetworks=[${allowed}] excludedNetworks=[${denied}]. Pick a target contained in one of the allowed ranges.`,
           riskScore: 10
         }
       }

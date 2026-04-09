@@ -21,6 +21,9 @@ import { showModelPicker } from './modelPicker.js'
 import { autoDetectLocal } from '../models/registry.js'
 import { MemoryManager } from '../memory/index.js'
 import { makeAnthropicSummarizer, makeOpenAISummarizer } from '../memory/summarizers.js'
+import { probeTools, formatBanner } from '../util/toolAvailability.js'
+import { primarySubnet } from '../util/networkDetect.js'
+import { stripThinking } from '../util/thinkingFilter.js'
 
 // ─── config from env / argv ──────────────────────────────────────────────────
 
@@ -371,7 +374,11 @@ async function dispatchPrompt(prompt: string, cfg: ReplConfig, mem: MemoryManage
     process.stdout.write = origWrite
   }
 
-  if (captured.trim()) mem.recordAssistant(captured.trim())
+  // For local providers, strip reasoning blocks before persisting so the
+  // memory log stays clean and future prompts don't re-include stale
+  // <think> noise. Anthropic doesn't emit those tags so it's a no-op there.
+  const toRecord = cfg.provider === 'anthropic' ? captured.trim() : stripThinking(captured)
+  if (toRecord) mem.recordAssistant(toRecord)
 
   // Auto-compact after every turn — the compactor is a no-op when under budget.
   try {
@@ -401,6 +408,24 @@ async function main(): Promise<void> {
   const memStats = mem.stats()
   if (memStats.turns > 0 || memStats.hasSummary) {
     console.log(C.dim(`  memory: ${memStats.turns} turns, ~${memStats.tokens} tokens${memStats.hasSummary ? ' (+summary)' : ''}`))
+  }
+
+  // Tool availability banner — so the user (and the model, via the
+  // rejected-tool error path) knows upfront which binaries are missing
+  // instead of discovering it via an ENOENT crash mid-scan.
+  try {
+    const tools = await probeTools()
+    console.log(C.dim('  ' + formatBanner(tools)))
+    const missing = (['nmap', 'nikto', 'sqlmap', 'hashcat', 'msfconsole'] as const).filter(k => !tools[k])
+    if (missing.length) {
+      console.log(C.warn(`  (${missing.join(', ')} not installed — those tool calls will fail cleanly)`))
+    }
+  } catch { /* non-fatal */ }
+
+  // Auto-detect the host's actual LAN so "scan my wifi" has a real target.
+  const sub = primarySubnet()
+  if (sub) {
+    console.log(C.dim(`  local subnet: ${sub.cidr} (${sub.iface})`))
   }
 
   const rl = readline.createInterface({

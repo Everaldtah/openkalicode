@@ -84,6 +84,11 @@ export class NiktoTool extends SecurityTool<typeof NiktoInputSchema, NiktoOutput
     
     return new Promise((resolve, reject) => {
       const process = spawn('nikto', args)
+      process.on('error', (err: NodeJS.ErrnoException) => {
+        reject(new Error(err.code === 'ENOENT'
+          ? 'nikto is not installed on this host.'
+          : `failed to spawn nikto: ${err.message}`))
+      })
       let output = ''
       let stderr = ''
       let progress: NiktoProgress = {
