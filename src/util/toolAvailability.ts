@@ -11,6 +11,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { safeSpawn } from './safeSpawn.js'
+import { rewriteProbe, dockerLabel, isDockerMode } from './dockerExec.js'
 
 export interface ToolAvailability {
   nmap: boolean
@@ -26,15 +27,22 @@ const CACHE_PATH = path.join(os.homedir(), '.config', 'openkaliclaude', 'tools.j
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000  // 24 h — installs don't change often
 
 async function which(bin: string): Promise<boolean> {
-  // `--version` is the cheapest cross-tool probe that exists on all five.
-  // If the binary is missing, safeSpawn rejects; otherwise we don't care
-  // about the exit code.
+  // Host mode: `<bin> --version`. Docker mode: `docker exec <c> sh -c "command -v <bin>"`.
+  // rewriteProbe() handles the branch so callers don't have to care.
+  const [cmd, args] = rewriteProbe(bin)
   try {
-    const { child, spawned } = safeSpawn(bin, ['--version'])
+    const { child, spawned } = safeSpawn(cmd, args)
     // Drain stdio so the pipes don't fill and block the child.
-    child.stdout.on('data', () => { /* drain */ })
+    let sawOutput = false
+    child.stdout.on('data', (d: Buffer) => { if (d.length > 0) sawOutput = true })
     child.stderr.on('data', () => { /* drain */ })
     await spawned
+    // For docker probes we also need a zero exit — `command -v` exits 1 when
+    // the binary isn't in the container. Wait for close().
+    if (isDockerMode()) {
+      const code: number = await new Promise(res => child.once('close', c => res(c ?? 1)))
+      return code === 0 && sawOutput
+    }
     child.kill()
     return true
   } catch {
@@ -57,7 +65,7 @@ export async function probeTools(force = false): Promise<ToolAvailability> {
   const out: ToolAvailability = {
     nmap, nikto, sqlmap, hashcat, msfconsole,
     checkedAt: new Date().toISOString(),
-    platform: `${os.platform()}-${os.arch()}`
+    platform: `${os.platform()}-${os.arch()}-${dockerLabel()}`
   }
   writeCache(out)
   return out
@@ -68,7 +76,9 @@ function readCache(): ToolAvailability | null {
     if (!fs.existsSync(CACHE_PATH)) return null
     const data = JSON.parse(fs.readFileSync(CACHE_PATH, 'utf8')) as ToolAvailability
     if (Date.now() - Date.parse(data.checkedAt) > CACHE_TTL_MS) return null
-    if (data.platform !== `${os.platform()}-${os.arch()}`) return null
+    // Include docker mode in the platform key so switching between host and
+    // container invalidates the cache automatically.
+    if (data.platform !== `${os.platform()}-${os.arch()}-${dockerLabel()}`) return null
     return data
   } catch { return null }
 }
@@ -82,7 +92,7 @@ function writeCache(a: ToolAvailability): void {
 
 export function formatBanner(a: ToolAvailability): string {
   const mark = (ok: boolean) => ok ? '✓' : '✗'
-  return `tools: nmap${mark(a.nmap)}  nikto${mark(a.nikto)}  sqlmap${mark(a.sqlmap)}  hashcat${mark(a.hashcat)}  msfconsole${mark(a.msfconsole)}`
+  return `tools (${dockerLabel()}): nmap${mark(a.nmap)}  nikto${mark(a.nikto)}  sqlmap${mark(a.sqlmap)}  hashcat${mark(a.hashcat)}  msfconsole${mark(a.msfconsole)}`
 }
 
 /** Throw a friendly error if a required binary is missing. */

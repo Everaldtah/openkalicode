@@ -24,6 +24,7 @@ import { makeAnthropicSummarizer, makeOpenAISummarizer } from '../memory/summari
 import { probeTools, formatBanner } from '../util/toolAvailability.js'
 import { primarySubnet } from '../util/networkDetect.js'
 import { stripThinking } from '../util/thinkingFilter.js'
+import { dockerContainer, dockerLabel } from '../util/dockerExec.js'
 
 // ─── config from env / argv ──────────────────────────────────────────────────
 
@@ -243,6 +244,7 @@ async function handleSlash(line: string, cfg: ReplConfig, mem: MemoryManager): P
       console.log('  /local    Auto-detect running local model (LM Studio or Ollama)')
       console.log('  /memory   Persistent memory stats + storage location')
       console.log('  /compact  Force context compaction of the running session')
+      console.log('  /docker   Show/toggle docker-exec mode (runs tools in a Kali container)')
       console.log('  /tools    List installed security tools')
       console.log('  /scope    Show current scope policy')
       console.log('  /clear    Clear the screen')
@@ -280,6 +282,32 @@ async function handleSlash(line: string, cfg: ReplConfig, mem: MemoryManager): P
       console.log(`  summary:      ${s.hasSummary ? C.ok('yes') : C.dim('none')}`)
       console.log(C.dim(`  log:     ${s.locations.log}`))
       console.log(C.dim(`  summary: ${s.locations.summary}\n`))
+      return true
+    }
+    case 'docker': {
+      // Show current mode and optionally set / clear the container name.
+      // Usage:
+      //   /docker                → print current mode
+      //   /docker kali-container → route all tool spawns through docker exec
+      //   /docker off            → go back to host mode
+      const arg = _rest.join(' ').trim()
+      if (!arg) {
+        console.log(C.label('\nDocker-exec mode:'))
+        console.log('  current: ' + C.text(dockerLabel()))
+        console.log(C.dim('  set with: /docker <container-name>   or  /docker off\n'))
+      } else if (arg === 'off' || arg === 'none') {
+        delete process.env.OKAL_DOCKER_EXEC
+        console.log(C.ok('  → switched to host mode\n'))
+      } else {
+        process.env.OKAL_DOCKER_EXEC = arg
+        console.log(C.ok(`  → routing tools through docker exec ${arg}`))
+        console.log(C.dim('    (make sure the container is running: `docker ps`)\n'))
+      }
+      // Re-probe so the banner reflects reality in the new mode.
+      try {
+        const tools = await probeTools(true)
+        console.log(C.dim('  ' + formatBanner(tools) + '\n'))
+      } catch { /* non-fatal */ }
       return true
     }
     case 'compact': {
@@ -408,6 +436,14 @@ async function main(): Promise<void> {
   const memStats = mem.stats()
   if (memStats.turns > 0 || memStats.hasSummary) {
     console.log(C.dim(`  memory: ${memStats.turns} turns, ~${memStats.tokens} tokens${memStats.hasSummary ? ' (+summary)' : ''}`))
+  }
+
+  // If docker-exec is configured, announce it before probing tools — the
+  // probe will run through `docker exec` automatically and the banner
+  // will show which of nmap/nikto/sqlmap/… actually exist in the container.
+  const container = dockerContainer()
+  if (container) {
+    console.log(C.dim(`  docker-exec: routing tool spawns through container ${C.text(container)}`))
   }
 
   // Tool availability banner — so the user (and the model, via the

@@ -5,6 +5,7 @@
 
 import { z } from 'zod'
 import { spawn } from 'child_process'
+import { rewriteForDocker } from '../../../util/dockerExec.js'
 import { XMLParser } from 'fast-xml-parser'
 import { SecurityTool, createFinding } from '../base/SecurityTool.js'
 import { TargetValidator } from '../base/TargetValidator.js'
@@ -170,11 +171,14 @@ export class NmapTool extends SecurityTool<typeof NmapInputSchema, NmapOutput, N
       return this.getDryRunOutput(input)
     }
     
-    // Execute nmap with XML output
-    const cmd = input.sudo ? ['sudo', 'nmap', ...args, '-oX', '-'] : ['nmap', ...args, '-oX', '-']
-    
+    // Execute nmap with XML output. In docker-exec mode the (cmd, args)
+    // pair is transparently rewritten to `docker exec <container> nmap …`
+    // and sudo is stripped (containers run as root). On the host it's
+    // unchanged — `sudo nmap …` if requested.
+    const [execCmd, execArgs] = rewriteForDocker('nmap', [...args, '-oX', '-'], { sudo: input.sudo })
+
     return new Promise((resolve, reject) => {
-      const process = spawn(cmd[0], cmd.slice(1))
+      const process = spawn(execCmd, execArgs)
       // Prevent ENOENT (binary missing) from crashing the REPL as an
       // unhandled 'error' event. Bubble it up as a tool error instead.
       process.on('error', (err: NodeJS.ErrnoException) => {

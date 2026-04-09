@@ -5,6 +5,7 @@
 
 import { z } from 'zod'
 import { spawn } from 'child_process'
+import { rewriteForDocker } from '../../../util/dockerExec.js'
 import { SecurityTool, createFinding } from '../base/SecurityTool.js'
 import { TargetValidator } from '../base/TargetValidator.js'
 import { SecurityReport, Finding, ToolProgress } from '../../../types/security.js'
@@ -89,10 +90,11 @@ export class SqlmapTool extends SecurityTool<typeof SqlmapInputSchema, SqlmapOut
     }
     
     return new Promise((resolve, reject) => {
-      const process = spawn('sqlmap', args)
+      const [execCmd, execArgs] = rewriteForDocker('sqlmap', args)
+      const process = spawn(execCmd, execArgs)
       process.on('error', (err: NodeJS.ErrnoException) => {
         reject(new Error(err.code === 'ENOENT'
-          ? 'sqlmap is not installed on this host.'
+          ? 'sqlmap is not installed (host) or docker container is not running.'
           : `failed to spawn sqlmap: ${err.message}`))
       })
       let output = ''

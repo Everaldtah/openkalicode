@@ -5,6 +5,7 @@
 
 import { z } from 'zod'
 import { spawn } from 'child_process'
+import { rewriteForDocker } from '../../../util/dockerExec.js'
 import { SecurityTool, createFinding } from '../base/SecurityTool.js'
 import { TargetValidator } from '../base/TargetValidator.js'
 import { SecurityReport, Finding, ToolProgress } from '../../../types/security.js'
@@ -83,10 +84,11 @@ export class NiktoTool extends SecurityTool<typeof NiktoInputSchema, NiktoOutput
     }
     
     return new Promise((resolve, reject) => {
-      const process = spawn('nikto', args)
+      const [execCmd, execArgs] = rewriteForDocker('nikto', args)
+      const process = spawn(execCmd, execArgs)
       process.on('error', (err: NodeJS.ErrnoException) => {
         reject(new Error(err.code === 'ENOENT'
-          ? 'nikto is not installed on this host.'
+          ? 'nikto is not installed (host) or docker container is not running.'
           : `failed to spawn nikto: ${err.message}`))
       })
       let output = ''
