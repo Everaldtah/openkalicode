@@ -17,7 +17,7 @@
  *
  *   # Ollama (default localhost:11434)
  *   okal-agent --provider ollama --model llama3.1:8b \
- *     -- "check http://192.168.56.101 for web vulns with nikto"
+*     -- "check https://192.168.56.101 for web vulns with nikto"
  */
 
 import { ScopeConstraint } from '../types/security.js'
