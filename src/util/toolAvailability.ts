@@ -11,7 +11,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { safeSpawn } from './safeSpawn.js'
-import { rewriteProbe, dockerLabel, isDockerMode } from './dockerExec.js'
+import { rewriteProbe, dockerLabel, isRemoteExec } from './dockerExec.js'
 
 export interface ToolAvailability {
   nmap: boolean
@@ -37,9 +37,9 @@ async function which(bin: string): Promise<boolean> {
     child.stdout.on('data', (d: Buffer) => { if (d.length > 0) sawOutput = true })
     child.stderr.on('data', () => { /* drain */ })
     await spawned
-    // For docker probes we also need a zero exit — `command -v` exits 1 when
-    // the binary isn't in the container. Wait for close().
-    if (isDockerMode()) {
+    // For remote-backend probes (docker or WSL) we also need a zero exit —
+    // `command -v` exits 1 when the binary isn't present. Wait for close().
+    if (isRemoteExec()) {
       const code: number = await new Promise(res => child.once('close', c => res(c ?? 1)))
       return code === 0 && sawOutput
     }

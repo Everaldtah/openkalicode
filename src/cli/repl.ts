@@ -24,7 +24,7 @@ import { makeAnthropicSummarizer, makeOpenAISummarizer } from '../memory/summari
 import { probeTools, formatBanner } from '../util/toolAvailability.js'
 import { primarySubnet } from '../util/networkDetect.js'
 import { stripThinking } from '../util/thinkingFilter.js'
-import { dockerContainer, dockerLabel } from '../util/dockerExec.js'
+import { dockerContainer, dockerLabel, autoConfigureWslBackend, wslDistro } from '../util/dockerExec.js'
 
 // ─── config from env / argv ──────────────────────────────────────────────────
 
@@ -438,12 +438,22 @@ async function main(): Promise<void> {
     console.log(C.dim(`  memory: ${memStats.turns} turns, ~${memStats.tokens} tokens${memStats.hasSummary ? ' (+summary)' : ''}`))
   }
 
-  // If docker-exec is configured, announce it before probing tools — the
-  // probe will run through `docker exec` automatically and the banner
-  // will show which of nmap/nikto/sqlmap/… actually exist in the container.
+  // Pick an execution backend before probing tools, so the probe reports what
+  // is available *there* and every spawn routes correctly.
+  //   - docker-exec: explicit, via OKAL_DOCKER_EXEC.
+  //   - WSL: explicit via OKAL_WSL_DISTRO, or auto-detected on Windows when a
+  //     Kali distro is installed (so tools "just work" with no config).
   const container = dockerContainer()
   if (container) {
     console.log(C.dim(`  docker-exec: routing tool spawns through container ${C.text(container)}`))
+  } else {
+    const auto = await autoConfigureWslBackend()
+    const distro = wslDistro()
+    if (distro) {
+      console.log(C.dim(`  wsl: routing tool spawns through ${C.text(distro)}${auto ? ' (auto-detected)' : ''}`))
+    } else if (process.platform === 'win32') {
+      console.log(C.warn('  no Kali backend found — install one: wsl --install -d kali-linux  (or set OKAL_DOCKER_EXEC / OKAL_WSL_DISTRO)'))
+    }
   }
 
   // Tool availability banner — so the user (and the model, via the
