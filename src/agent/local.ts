@@ -21,6 +21,7 @@
 
 import { AgentToolContext, buildOpenAITools, dispatchToolCall, buildAgentSystemPrompt } from './tools.js'
 import { ThinkingStreamFilter, stripThinking } from '../util/thinkingFilter.js'
+import { renderCommandsToStderr } from '../util/commandLog.js'
 
 /**
  * Extra guardrails specifically for small OSS models (Qwen, Llama, DeepSeek…).
@@ -72,6 +73,9 @@ const DEFAULT_BASE_URLS: Record<LocalProvider, string> = {
 
 export async function runLocalAgent(opts: LocalAgentOptions): Promise<void> {
   const { default: OpenAI } = await import('openai')
+
+  // Live command visibility — shared with the Anthropic path.
+  renderCommandsToStderr()
 
   const baseURL = opts.baseUrl || DEFAULT_BASE_URLS[opts.provider]
   const client = new OpenAI({
@@ -126,7 +130,8 @@ export async function runLocalAgent(opts: LocalAgentOptions): Promise<void> {
     }
 
     for (const call of toolCalls) {
-      console.error(`[agent] -> ${call.function.name}(${call.function.arguments})`)
+      // The command view (via emitToolCall inside dispatchToolCall) renders the
+      // call line now, so no separate print here.
       const result = await dispatchToolCall(call.function.name, call.function.arguments, opts.ctx)
       messages.push({
         role: 'tool',

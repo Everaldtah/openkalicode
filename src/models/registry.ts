@@ -25,12 +25,20 @@ export interface ModelEntry {
 
 // ─── static catalogs ────────────────────────────────────────────────────────
 
+// Ordered most-capable → legacy. The picker highlights the first selectable
+// entry, so Claude Fable 5 (Anthropic's most capable widely released model) is
+// the default highlight. IDs are the exact API strings — do not append date
+// suffixes.
 const ANTHROPIC_MODELS: ModelEntry[] = [
-  { provider: 'anthropic', model: 'claude-opus-4-6',     label: 'Claude Opus 4.6  (flagship)' },
-  { provider: 'anthropic', model: 'claude-sonnet-4-6',   label: 'Claude Sonnet 4.6 (default)' },
+  { provider: 'anthropic', model: 'claude-fable-5',      label: 'Claude Fable 5   (flagship · most capable)' },
+  { provider: 'anthropic', model: 'claude-opus-4-8',     label: 'Claude Opus 4.8   (agentic flagship)' },
+  { provider: 'anthropic', model: 'claude-opus-4-7',     label: 'Claude Opus 4.7' },
+  { provider: 'anthropic', model: 'claude-opus-4-6',     label: 'Claude Opus 4.6' },
+  { provider: 'anthropic', model: 'claude-sonnet-5',     label: 'Claude Sonnet 5   (balanced · default)' },
+  { provider: 'anthropic', model: 'claude-sonnet-4-6',   label: 'Claude Sonnet 4.6' },
   { provider: 'anthropic', model: 'claude-haiku-4-5',    label: 'Claude Haiku 4.5  (fast/cheap)' },
-  { provider: 'anthropic', model: 'claude-opus-4-5',     label: 'Claude Opus 4.5' },
-  { provider: 'anthropic', model: 'claude-sonnet-4-5',   label: 'Claude Sonnet 4.5' }
+  { provider: 'anthropic', model: 'claude-opus-4-5',     label: 'Claude Opus 4.5   (legacy)' },
+  { provider: 'anthropic', model: 'claude-sonnet-4-5',   label: 'Claude Sonnet 4.5 (legacy)' }
 ]
 
 const OPENAI_MODELS: ModelEntry[] = [

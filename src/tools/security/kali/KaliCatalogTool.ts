@@ -1,0 +1,146 @@
+/**
+ * OpenKaliClaude — Kali Catalog (discovery)
+ *
+ * A read-only companion to `KaliTool`. It lets the agent discover which Kali
+ * tools exist and, crucially, *how to use them* — categories, purpose, and
+ * concrete example command lines — without every tool's schema having to live
+ * permanently in the system prompt. The model queries this on demand, then
+ * runs the chosen tool via the `kali` runner.
+ *
+ * It never executes anything, so it takes no target and needs no scope check.
+ */
+
+import { z } from 'zod'
+import { SecurityTool, createFinding } from '../base/SecurityTool.js'
+import {
+  SecurityReport,
+  Finding,
+  ToolUseContext,
+  PermissionResult,
+  SecurityToolConfig,
+} from '../../../types/security.js'
+import {
+  KALI_CATEGORIES,
+  KaliCategory,
+  findTool,
+  searchCatalog,
+  toolsInCategory,
+  KaliToolSpec,
+} from './catalog.js'
+
+const KaliCatalogInputSchema = z.object({
+  action: z.enum(['list-categories', 'list', 'search', 'detail']).default('list-categories')
+    .describe('list-categories: all categories with counts. list: tools in a category. search: free-text. detail: full usage for one tool.'),
+  category: z.string().optional().describe('Category name for the "list" action (e.g. "web-application").'),
+  query: z.string().optional().describe('Search text for the "search" action.'),
+  tool: z.string().optional().describe('Binary name for the "detail" action (e.g. "hydra").'),
+})
+
+type KaliCatalogInput = z.infer<typeof KaliCatalogInputSchema>
+
+export interface KaliCatalogOutput {
+  action: string
+  categories?: Array<{ category: string; count: number; tools: string[] }>
+  tools?: Array<Pick<KaliToolSpec, 'binary' | 'name' | 'category' | 'permission' | 'summary'> & { destructive: boolean }>
+  detail?: KaliToolSpec
+  message?: string
+}
+
+export class KaliCatalogTool extends SecurityTool<typeof KaliCatalogInputSchema, KaliCatalogOutput> {
+  name = 'Kali Catalog'
+  aliases = ['kali_catalog', 'kali-catalog', 'kali-list', 'tools']
+  description =
+    'Discover Kali Linux tools and how to use them. Actions: list-categories, list (by category), ' +
+    'search (free text), detail (full usage + examples for one tool). Read-only — pair it with the ' +
+    '"kali" runner to actually execute a tool.'
+  inputSchema = KaliCatalogInputSchema
+
+  config: SecurityToolConfig = {
+    category: 'reconnaissance',
+    permissionLevel: 'passive-recon',
+    requiresSudo: false,
+    isDestructive: false,
+    legalWarnings: [],
+    version: '1.0.0',
+    references: ['https://www.kali.org/tools/'],
+  }
+
+  async execute(input: KaliCatalogInput): Promise<KaliCatalogOutput> {
+    switch (input.action) {
+      case 'list-categories':
+        return {
+          action: input.action,
+          categories: KALI_CATEGORIES.map(cat => {
+            const tools = toolsInCategory(cat)
+            const bins = Array.from(new Set(tools.map(t => t.binary)))
+            return { category: cat, count: bins.length, tools: bins }
+          }),
+        }
+
+      case 'list': {
+        const cat = (input.category || '').trim().toLowerCase() as KaliCategory
+        if (!KALI_CATEGORIES.includes(cat)) {
+          return { action: input.action, message: `Unknown category '${input.category}'. Valid: ${KALI_CATEGORIES.join(', ')}` }
+        }
+        return { action: input.action, tools: this.summaries(toolsInCategory(cat)) }
+      }
+
+      case 'search': {
+        const hits = searchCatalog(input.query || '')
+        return {
+          action: input.action,
+          tools: this.summaries(hits),
+          message: hits.length ? undefined : `No tools matched '${input.query}'.`,
+        }
+      }
+
+      case 'detail': {
+        const spec = input.tool ? findTool(input.tool) : undefined
+        if (!spec) {
+          return { action: input.action, message: `'${input.tool}' is not catalogued. Try the search action, or run it anyway via the kali tool.` }
+        }
+        return { action: input.action, detail: spec }
+      }
+
+      default:
+        return { action: input.action, message: 'Unknown action.' }
+    }
+  }
+
+  private summaries(specs: KaliToolSpec[]): KaliCatalogOutput['tools'] {
+    // De-dup by binary (some binaries appear under multiple categories).
+    const seen = new Set<string>()
+    const out: NonNullable<KaliCatalogOutput['tools']> = []
+    for (const t of specs) {
+      if (seen.has(t.binary)) continue
+      seen.add(t.binary)
+      out.push({
+        binary: t.binary, name: t.name, category: t.category,
+        permission: t.permission, summary: t.summary, destructive: !!t.destructive,
+      })
+    }
+    return out
+  }
+
+  async validatePermissions(_input: KaliCatalogInput, _context: ToolUseContext): Promise<PermissionResult> {
+    return { granted: true, requiresConfirmation: false, riskScore: 0 }
+  }
+
+  generateReport(output: KaliCatalogOutput): SecurityReport {
+    const findings: Finding[] = [createFinding(
+      `Catalog: ${output.action}`,
+      output.message || `Returned catalog data for action '${output.action}'.`,
+      'info', 'Reconnaissance')]
+    return this.reportGenerator.generate(findings, { title: 'Kali catalog lookup' })
+  }
+
+  protected calculateRiskScore(): number {
+    return 0
+  }
+
+  protected estimateImpact(): string {
+    return 'None — read-only catalog lookup.'
+  }
+}
+
+export const kaliCatalogTool = new KaliCatalogTool()

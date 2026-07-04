@@ -51,7 +51,7 @@ function parseConfig(): ReplConfig {
   const argv = process.argv.slice(2)
   const cfg: ReplConfig = {
     provider: 'anthropic',
-    model: 'claude-sonnet-4-6',
+    model: 'claude-sonnet-5',
     scope: DEFAULT_SCOPE,
     audit: true,
     username: process.env.USER || process.env.USERNAME || 'operator'
@@ -91,7 +91,7 @@ OpenKaliClaude — Interactive Security Agent
 
 Options:
   --provider <name>   anthropic | lmstudio | ollama | custom  (default: anthropic)
-  --model <name>      Model to use (default: claude-sonnet-4-6)
+  --model <name>      Model to use (default: claude-sonnet-5; /models to pick, up to Claude Fable 5)
   --base-url <url>    Override base URL for local providers
   --scope <json>      ScopeConstraint JSON (defaults to localhost + RFC1918)
   --no-audit          Disable audit logging

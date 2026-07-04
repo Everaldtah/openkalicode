@@ -12,7 +12,8 @@
  * No credentials are read or stored by OpenKaliClaude itself.
  */
 
-import { AgentToolContext, buildAnthropicMcpServer, buildAgentSystemPrompt } from './tools.js'
+import { AgentToolContext, buildAnthropicMcpServer, buildAgentSystemPrompt, anthropicAllowedToolNames } from './tools.js'
+import { renderCommandsToStderr } from '../util/commandLog.js'
 
 export interface AnthropicAgentOptions {
   prompt: string
@@ -24,6 +25,10 @@ export interface AnthropicAgentOptions {
 
 export async function runAnthropicAgent(opts: AnthropicAgentOptions): Promise<void> {
   const { query } = await import('@anthropic-ai/claude-agent-sdk')
+
+  // Live command visibility — print each tool call / resolved command as the
+  // agent runs it, so the operator isn't staring at a blind box.
+  renderCommandsToStderr()
 
   const mcpServer = await buildAnthropicMcpServer(opts.ctx)
 
@@ -41,13 +46,9 @@ export async function runAnthropicAgent(opts: AnthropicAgentOptions): Promise<vo
       mcpServers: { 'openkaliclaude-security': mcpServer },
       // Allow only our security tools — block file/bash/web fetch from the
       // SDK's built-ins so the model can't shell out around the guard rails.
-      allowedTools: [
-        'mcp__openkaliclaude-security__nmap',
-        'mcp__openkaliclaude-security__nikto',
-        'mcp__openkaliclaude-security__sqlmap',
-        'mcp__openkaliclaude-security__hashcat',
-        'mcp__openkaliclaude-security__metasploit'
-      ],
+      // Generated from the live registry so new tools (kali, kali_catalog, …)
+      // are enabled automatically instead of silently blocked.
+      allowedTools: anthropicAllowedToolNames(),
       permissionMode: 'default'
     }
   })

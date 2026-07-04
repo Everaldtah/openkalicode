@@ -15,6 +15,8 @@
 
 import { zodToJsonSchema } from 'zod-to-json-schema'
 import { securityTools } from '../tools/security/index.js'
+import { categoryIndex } from '../tools/security/kali/index.js'
+import { emitToolCall } from '../util/commandLog.js'
 import { ScopeConstraint, ToolUseContext } from '../types/security.js'
 
 /**
@@ -51,6 +53,18 @@ export function buildAgentSystemPrompt(scope: ScopeConstraint): string {
   }
 
   lines.push(
+    '',
+    '## The Kali universal protocol',
+    '',
+    'Beyond the purpose-built tools above, you have a universal protocol for the **entire Kali Linux toolchain**:',
+    '',
+    '- **kali_catalog** — discover tools and *how to use them*. `action:"list-categories"` for the map, `action:"list"` with a `category` for a category, `action:"search"` with a `query`, `action:"detail"` with a `tool` for full usage and example command lines.',
+    '- **kali** — execute ANY Kali tool. Pass `tool` (the binary, e.g. "gobuster") and `args` (a token array, e.g. ["dir","-u","http://x","-w","list.txt"]). Put the primary target in the `target` field as well so it is scope-checked. Use `stdin` for tools that read a script (e.g. msfconsole -r -), `dryRun:true` to preview the exact command, and `timeoutMs` for long runs.',
+    '',
+    'Workflow: if a dedicated tool exists (nmap/nikto/sqlmap/hashcat/metasploit) prefer it for its parsed output. Otherwise look the tool up with **kali_catalog** to get correct flags, then run it with **kali**. You are not limited to a fixed tool list — anything in Kali is reachable this way.',
+    '',
+    'Catalogued tool categories (each runnable via `kali`):',
+    categoryIndex(),
     '',
     '## Operating doctrine',
     '',
@@ -108,6 +122,18 @@ function toolName(name: string): string {
   return name.toLowerCase().replace(/\s+/g, '_')
 }
 
+/** In-process MCP server name the Anthropic SDK registers our tools under. */
+export const ANTHROPIC_MCP_SERVER = 'openkaliclaude-security'
+
+/**
+ * The `allowedTools` list for the Anthropic SDK, generated from the live tool
+ * registry so it never goes stale. Adding a tool to `securityTools`
+ * automatically makes it callable — no second list to keep in sync.
+ */
+export function anthropicAllowedToolNames(): string[] {
+  return securityTools.map(t => `mcp__${ANTHROPIC_MCP_SERVER}__${toolName(t.name)}`)
+}
+
 /**
  * OpenAI-compatible tool definitions (LM Studio, Ollama, etc.)
  */
@@ -142,6 +168,11 @@ export async function dispatchToolCall(
   } catch (e) {
     return JSON.stringify({ error: `Invalid JSON arguments: ${(e as Error).message}` })
   }
+
+  // Surface the call to the operator's command view before executing, so the
+  // agent's actions are visible in real time rather than a blind box. Fires
+  // for every tool and both providers (this is the shared dispatch path).
+  emitToolCall(name, args)
 
   try {
     const result = await tool.call(
