@@ -205,6 +205,40 @@ OpenKaliClaude is for **authorized** security testing only — penetration tests
 - **Kali-Linux tools** in `$PATH` (or use the Docker image): `nmap`, `nikto`, `sqlmap`, `hashcat`, `msfconsole`
 - Linux/macOS recommended; Windows works for the framework itself but most underlying tools assume a POSIX environment
 
+### Execution backend, networking & provisioning
+
+On a native Kali box the tools are on `$PATH` and run directly. On Windows/macOS, tool spawns are transparently routed into a backend that has the Kali toolchain:
+
+| Backend | Enable | Notes |
+|---|---|---|
+| **WSL2** | `wsl --install -d kali-linux` (auto-detected on Windows) | Runs `wsl.exe -d <distro> -- <tool>`. Set `OKAL_WSL_DISTRO` to override, `OKAL_WSL_AUTO=0` to disable auto-detect. |
+| **Docker** | `OKAL_DOCKER_EXEC=<container>` | Runs `docker exec <container> <tool>`; takes precedence over WSL. |
+
+**What's actually installed vs catalogued.** The Kali catalog documents ~140 tools, but a fresh WSL/Docker image ships only a handful (typically `nmap`, `nikto`, `sqlmap`, `hashcat`, plus `hydra`, `john`, `dig`). `kali_catalog` now probes the active backend with `which` at query time and tags every entry with `installed: true|false`, and `list-categories` reports an `installed/total` count per category — so the agent no longer wastes a call discovering a tool is missing. To get the full arsenal, install it in the distro:
+
+```bash
+# inside the Kali WSL distro / container
+sudo apt update
+sudo apt install -y kali-linux-large      # ~everything; or kali-linux-headless for a smaller set
+# or cherry-pick: sudo apt install -y gobuster nuclei whatweb masscan seclists dnsenum
+```
+
+**Networking caveat (WSL2).** By default WSL2 runs in its own network namespace, so `nmap 127.0.0.1` scans **WSL's** loopback, not the Windows host — Windows-only ports (SMB/RPC/etc.) won't show up. To scan the real host, target its LAN IP, or enable mirrored networking so loopback is shared. In `%UserProfile%\.wslconfig`:
+
+```ini
+[wsl2]
+networkingMode=mirrored
+```
+
+**Privileges / systemd.** The distro usually runs as an unprivileged user, and each call may print `Failed to start the systemd user session` (harmless). SYN scans work, but raw-socket / `sudo` tools (e.g. `masscan`, some `nmap` modes, `responder`) need root — the backend rewriter maps `sudo:true` to WSL's passwordless root (`wsl.exe -u root`). To quiet the warning and enable services, add to `/etc/wsl.conf` in the distro and `wsl --shutdown`:
+
+```ini
+[boot]
+systemd=true
+```
+
+By default the `kali` runner only executes catalogued binaries (or ones actually present on the backend). Set `OKAL_KALI_ALLOW_ANY=1` to lift the catalog allow-list (still name-guarded, still scope-checked) on a dedicated box.
+
 ### Option A — One-line installer (Linux / macOS / WSL)
 
 ```bash
@@ -313,23 +347,24 @@ OpenKaliClaude ships an agent runtime that lets a model autonomously drive the s
 
 ```bash
 # 1) Anthropic with your Claude subscription (no API key needed if logged in)
-okal-agent --provider anthropic --model claude-sonnet-4-6 -- \
+okal-agent --provider anthropic --model claude-fable-5-1 -- \
   "scan 192.168.1.0/24 and tell me which open ports look risky"
 
 # 2) Anthropic with explicit API key (pay-as-you-go)
 ANTHROPIC_API_KEY=sk-ant-... okal-agent --provider anthropic \
-  --model claude-opus-4-6 -- "audit http://192.168.56.101 with nikto then sqlmap"
+  --model claude-opus-5 -- "audit http://192.168.56.101 with nikto then sqlmap"
 
-# 3) LM Studio — load a tool-calling model (e.g. Qwen2.5-Coder) first
-okal-agent --provider lmstudio --model qwen2.5-coder -- \
+# 3) LM Studio — pass any installed model id; LM Studio JIT-loads it.
+#    Prefer a tool-calling model (the /models picker flags ⚠no-tools ones).
+okal-agent --provider lmstudio --model qwen/qwen3.5-9b -- \
   "do a quick nmap scan of 10.0.0.5"
 
 # 4) Ollama
-okal-agent --provider ollama --model llama3.1:8b -- \
+okal-agent --provider ollama --model qwen2.5-coder:7b -- \
   "check 192.168.1.10 for open ports"
 
 # 5) Tighten the scope for this session
-okal-agent --provider anthropic --model claude-sonnet-4-6 \
+okal-agent --provider anthropic --model claude-sonnet-5 \
   --scope '{"allowedNetworks":["10.10.0.0/16"],"allowedDomains":["*.lab.internal"],"excludedNetworks":[],"excludedDomains":[],"maxScope":"cidr/16","requireAuthorization":true}' \
   -- "enumerate the lab subnet"
 ```

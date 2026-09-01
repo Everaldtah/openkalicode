@@ -13,11 +13,11 @@
  */
 
 import { AgentToolContext, buildAnthropicMcpServer, buildAgentSystemPrompt, anthropicAllowedToolNames } from './tools.js'
-import { renderCommandsToStderr } from '../util/commandLog.js'
+import { renderCommandsToStderr, emitStatus } from '../util/commandLog.js'
 
 export interface AnthropicAgentOptions {
   prompt: string
-  model?: string                // e.g. "claude-sonnet-4-6", "claude-opus-4-6"
+  model?: string                // e.g. "claude-fable-5-1", "claude-sonnet-5"
   systemPrompt?: string
   maxTurns?: number
   ctx: AgentToolContext
@@ -53,18 +53,27 @@ export async function runAnthropicAgent(opts: AnthropicAgentOptions): Promise<vo
     }
   })
 
+  // Live view: Claude is thinking until the first message streams back. Tool
+  // calls/results inside the run are surfaced by the shared dispatch layer,
+  // which also re-arms this spinner after each tool returns.
+  emitStatus('Claude is thinking', true)
+
   for await (const message of response) {
     if (message.type === 'assistant') {
+      emitStatus('', false)   // clear the spinner before printing the reply
       const content = (message as { message?: { content?: Array<{ type: string; text?: string }> } }).message?.content
       if (Array.isArray(content)) {
+        let wroteText = false
         for (const block of content) {
           if (block.type === 'text' && block.text) {
             process.stdout.write(block.text)
+            wroteText = true
           }
         }
-        process.stdout.write('\n')
+        if (wroteText) process.stdout.write('\n')
       }
     } else if (message.type === 'result') {
+      emitStatus('', false)
       const result = message as { subtype?: string; total_cost_usd?: number; num_turns?: number }
       if (result.subtype === 'success') {
         console.error(`\n[agent] turns=${result.num_turns} cost=$${result.total_cost_usd?.toFixed(4) ?? '0'}`)
@@ -73,4 +82,7 @@ export async function runAnthropicAgent(opts: AnthropicAgentOptions): Promise<vo
       }
     }
   }
+
+  // Belt and braces: never leave a spinner running after the stream ends.
+  emitStatus('', false)
 }

@@ -83,12 +83,13 @@ export class NiktoTool extends SecurityTool<typeof NiktoInputSchema, NiktoOutput
       return this.getDryRunOutput(input)
     }
     
+    const startTime = new Date().toISOString()
     return new Promise((resolve, reject) => {
       const [execCmd, execArgs] = rewriteForDocker('nikto', args)
       const process = spawn(execCmd, execArgs)
       process.on('error', (err: NodeJS.ErrnoException) => {
         reject(new Error(err.code === 'ENOENT'
-          ? 'nikto is not installed (host) or docker container is not running.'
+          ? 'nikto is not installed in the active backend (WSL/Docker/host).'
           : `failed to spawn nikto: ${err.message}`))
       })
       let output = ''
@@ -99,23 +100,26 @@ export class NiktoTool extends SecurityTool<typeof NiktoInputSchema, NiktoOutput
         currentCheck: '',
         itemsFound: 0
       }
-      
+
       process.stdout.on('data', (data) => {
         const chunk = data.toString()
         output += chunk
         this.parseProgress(chunk, progress, onProgress)
       })
-      
+
       process.stderr.on('data', (data) => {
         stderr += data.toString()
       })
-      
+
       process.on('close', (code) => {
         if (code !== 0 && code !== null) {
-          reject(new Error(`nikto exited with code ${code}: ${stderr}`))
+          reject(new Error(`nikto exited with code ${code}: ${stderr || output}`))
         } else {
           try {
-            const parsed = this.parseOutput(output, input)
+            // nikto writes its findings to stdout, but some builds emit the
+            // banner/summary on stderr — parse both so a real run isn't scored
+            // as zero findings.
+            const parsed = this.parseOutput(output + '\n' + stderr, input, startTime)
             resolve(parsed)
           } catch (e) {
             reject(new Error(`Failed to parse nikto output: ${e}`))
@@ -162,14 +166,21 @@ export class NiktoTool extends SecurityTool<typeof NiktoInputSchema, NiktoOutput
     if (input.maxTime) {
       args.push('-maxtime', input.maxTime)
     }
-    
-    // Output format
-    args.push('-Format', input.outputFormat)
-    
+
+    // Never let nikto block on its interactive "update?" prompt in a headless
+    // run — it would hang until the timeout with no output.
+    args.push('-ask', 'no')
+
+    // NOTE: we deliberately do NOT pass `-Format`. Nikto's structured formats
+    // (json/csv/xml) require a companion `-o <file>` and would otherwise be
+    // ignored or error; our parser reads nikto's default human-readable stdout
+    // (`+ /path - message`). `outputFormat` is retained in the schema for
+    // callers that post-process the raw report elsewhere.
+
     return args
   }
-  
-  private parseOutput(output: string, input: NiktoInput): NiktoOutput {
+
+  private parseOutput(output: string, input: NiktoInput, startTime?: string): NiktoOutput {
     const findings: NiktoOutput['findings'] = []
     const lines = output.split('\n')
     
@@ -195,7 +206,7 @@ export class NiktoTool extends SecurityTool<typeof NiktoInputSchema, NiktoOutput
       ssl: input.ssl,
       findings,
       scanInfo: {
-        startTime: new Date().toISOString(),
+        startTime: startTime || new Date().toISOString(),
         endTime: new Date().toISOString(),
         totalChecks: findings.length,
         itemsFound: findings.length

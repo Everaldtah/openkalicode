@@ -16,7 +16,7 @@
 import { zodToJsonSchema } from 'zod-to-json-schema'
 import { securityTools } from '../tools/security/index.js'
 import { categoryIndex } from '../tools/security/kali/index.js'
-import { emitToolCall } from '../util/commandLog.js'
+import { emitToolCall, emitToolResult, emitStatus } from '../util/commandLog.js'
 import { ScopeConstraint, ToolUseContext } from '../types/security.js'
 
 /**
@@ -30,7 +30,20 @@ import { ScopeConstraint, ToolUseContext } from '../types/security.js'
  * default failure mode of generic Claude prompts is to coach the human
  * through manual shell commands instead of actually invoking the tool calls.
  */
-export function buildAgentSystemPrompt(scope: ScopeConstraint): string {
+export interface SystemPromptOptions {
+  /**
+   * Emit a much shorter prompt for small-context local models. LM Studio and
+   * Ollama routinely JIT-load models at a 4096-token context; the full prompt
+   * (tool-by-tool descriptions + the entire Kali category index + doctrine)
+   * runs ~5k tokens and overflows that on the very first turn. The compact
+   * variant keeps the operating rules and the universal kali protocol but
+   * lists tools by name only, so it fits comfortably.
+   */
+  compact?: boolean
+}
+
+export function buildAgentSystemPrompt(scope: ScopeConstraint, opts: SystemPromptOptions = {}): string {
+  if (opts.compact) return buildCompactAgentSystemPrompt(scope)
   const lines: string[] = []
 
   lines.push(
@@ -58,7 +71,7 @@ export function buildAgentSystemPrompt(scope: ScopeConstraint): string {
     '',
     'Beyond the purpose-built tools above, you have a universal protocol for the **entire Kali Linux toolchain**:',
     '',
-    '- **kali_catalog** — discover tools and *how to use them*. `action:"list-categories"` for the map, `action:"list"` with a `category` for a category, `action:"search"` with a `query`, `action:"detail"` with a `tool` for full usage and example command lines.',
+    '- **kali_catalog** — discover tools and *how to use them*. `action:"list-categories"` for the map (each category reports how many of its tools are actually `installed`), `action:"list"` with a `category`, `action:"search"` with a `query`, `action:"detail"` with a `tool` for full usage and example command lines. Every tool entry carries `installed: true|false` for the current backend — prefer installed tools, and never burn a call running one whose `installed` is false; tell the user to install it (or pick an installed alternative) instead.',
     '- **kali** — execute ANY Kali tool. Pass `tool` (the binary, e.g. "gobuster") and `args` (a token array, e.g. ["dir","-u","http://x","-w","list.txt"]). Put the primary target in the `target` field as well so it is scope-checked. Use `stdin` for tools that read a script (e.g. msfconsole -r -), `dryRun:true` to preview the exact command, and `timeoutMs` for long runs.',
     '',
     'Workflow: if a dedicated tool exists (nmap/nikto/sqlmap/hashcat/metasploit) prefer it for its parsed output. Otherwise look the tool up with **kali_catalog** to get correct flags, then run it with **kali**. You are not limited to a fixed tool list — anything in Kali is reachable this way.',
@@ -99,6 +112,35 @@ export function buildAgentSystemPrompt(scope: ScopeConstraint): string {
   )
 
   return lines.join('\n')
+}
+
+/**
+ * Compact system prompt for small-context local models. Same doctrine, far
+ * fewer tokens: tools are listed by name (no per-tool paragraph), and the
+ * exhaustive Kali category index is collapsed to a single line.
+ */
+function buildCompactAgentSystemPrompt(scope: ScopeConstraint): string {
+  const toolNames = securityTools.map(t => toolName(t.name)).join(', ')
+  return [
+    'You are OpenKaliClaude, an autonomous offensive-security agent built on the Kali toolchain.',
+    'You CALL tools directly to scan/enumerate/exploit/crack. You never tell the user to run commands themselves — that is your job.',
+    '',
+    `Purpose-built tools (call by name): ${toolNames}.`,
+    'Universal protocol for ANY other Kali tool:',
+    '- kali_catalog — discover tools/usage. action:"list-categories" | "list"(category) | "search"(query) | "detail"(tool). Entries carry installed:true/false — never run a tool whose installed is false; suggest installing it or pick an installed one.',
+    '- kali — run any tool. Pass tool (binary), args (token array), and target (scope-checked). Use dryRun:true to preview.',
+    `Kali categories: ${categoryIndex().split('\n')[0] || 'information-gathering, vulnerability-analysis, web-application, password-attacks, wireless-attacks, exploitation, forensics, …'}`,
+    '',
+    'Rules:',
+    `1. Scope is enforced by the framework. allowed networks: ${JSON.stringify(scope.allowedNetworks)}; allowed domains: ${JSON.stringify(scope.allowedDomains)}. A call outside scope is rejected — do not retry it; tell the user which scope to add.`,
+    '2. Methodology: recon (nmap quick) → enumerate (nikto on web ports) → assess (nmap vuln) → exploit only with explicit confirmation (prefer checkOnly) → crack (hashcat) → report by severity.',
+    '3. Call AT MOST ONE tool per turn, then read its result before the next step.',
+    '4. If a tool is "not installed", do not retry it — say so and suggest an alternative.',
+    '5. Destructive/high-risk actions (metasploit exploit, sqlmap --dump, hashcat brute-force) need explicit user go-ahead first.',
+    '6. Be terse. No chain-of-thought narration. Do the work, then report findings grouped host → service → finding, with remediation.',
+    '',
+    'Read the request, pick the right tool, and CALL IT.'
+  ].join('\n')
 }
 
 export interface AgentToolContext {
@@ -159,6 +201,7 @@ export async function dispatchToolCall(
 ): Promise<string> {
   const tool = securityTools.find(t => toolName(t.name) === name)
   if (!tool) {
+    emitToolResult(name, false, `unknown tool: ${name}`)
     return JSON.stringify({ error: `Unknown tool: ${name}` })
   }
 
@@ -166,13 +209,22 @@ export async function dispatchToolCall(
   try {
     args = typeof rawArgs === 'string' ? JSON.parse(rawArgs) : rawArgs
   } catch (e) {
+    emitToolResult(name, false, `invalid JSON arguments`)
     return JSON.stringify({ error: `Invalid JSON arguments: ${(e as Error).message}` })
   }
 
-  // Surface the call to the operator's command view before executing, so the
-  // agent's actions are visible in real time rather than a blind box. Fires
+  // Surface the call to the operator's live tool view before executing, so the
+  // model's actions are visible in real time rather than a blind box. Fires
   // for every tool and both providers (this is the shared dispatch path).
   emitToolCall(name, args)
+  const t0 = Date.now()
+  // After the call resolves we hand control back to the model, so re-arm the
+  // "thinking" spinner from here — covers the wait before the next step on
+  // both the Anthropic and local providers.
+  const done = (ok: boolean, summary: string) => {
+    emitToolResult(name, ok, summary, Date.now() - t0)
+    emitStatus('model is thinking', true)
+  }
 
   try {
     const result = await tool.call(
@@ -182,9 +234,11 @@ export async function dispatchToolCall(
       null
     )
     if (!result.success) {
+      done(false, result.error || 'failed')
       return JSON.stringify({ error: result.error, success: false })
     }
     const report = tool.generateReport(result.data as never)
+    done(true, `${report.severity} · ${report.findings.length} finding(s) · ${truncateSummary(report.summary)}`)
     return JSON.stringify({
       success: true,
       data: result.data,
@@ -196,8 +250,14 @@ export async function dispatchToolCall(
       }
     })
   } catch (e) {
+    done(false, (e as Error).message)
     return JSON.stringify({ error: (e as Error).message })
   }
+}
+
+function truncateSummary(s: string): string {
+  const oneLine = (s || '').replace(/\s+/g, ' ').trim()
+  return oneLine.length > 120 ? oneLine.slice(0, 120) + '…' : oneLine
 }
 
 /**

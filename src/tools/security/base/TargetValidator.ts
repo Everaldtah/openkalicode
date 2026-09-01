@@ -11,41 +11,97 @@ export class TargetValidator {
    * Check if a target is within authorized scope
    */
   async isAuthorized(target: string, scope: ScopeConstraint): Promise<boolean> {
+    // Web tools (nikto, sqlmap, gobuster, wpscan, …) are pointed at URLs like
+    // `http://localhost/?id=1`. Scope is defined in terms of hosts/CIDRs, so
+    // reduce the target to its hostname/IP before matching — otherwise the
+    // whole URL string is compared against the domain list and never matches,
+    // rejecting in-scope web targets.
+    const host = this.extractHost(target)
+
     // Check excluded networks first
     for (const excluded of scope.excludedNetworks) {
-      if (this.matchesNetwork(target, excluded)) {
+      if (this.matchesNetwork(host, excluded)) {
         return false
       }
     }
-    
+
     // Check excluded domains
     for (const excluded of scope.excludedDomains) {
-      if (this.matchesDomain(target, excluded)) {
+      if (this.matchesDomain(host, excluded)) {
         return false
       }
     }
-    
+
     // If no allowed networks/domains specified, check if target is safe
     if (scope.allowedNetworks.length === 0 && scope.allowedDomains.length === 0) {
       // Default: only allow private/local addresses
-      return this.isPrivateOrLocalhost(target)
+      return this.isPrivateOrLocalhost(host)
     }
-    
+
     // Check allowed networks
     for (const allowed of scope.allowedNetworks) {
-      if (this.matchesNetwork(target, allowed)) {
+      if (this.matchesNetwork(host, allowed)) {
         return true
       }
     }
-    
+
     // Check allowed domains
     for (const allowed of scope.allowedDomains) {
-      if (this.matchesDomain(target, allowed)) {
+      if (this.matchesDomain(host, allowed)) {
         return true
       }
     }
-    
+
     return false
+  }
+
+  /**
+   * Reduce a target to the bare host used for scope matching. Handles:
+   *   - full URLs:            http://localhost/?id=1  → localhost
+   *   - scheme + creds + port https://u:p@10.0.0.5:8443/x → 10.0.0.5
+   *   - scheme-less URLs:     localhost/admin         → localhost
+   *   - host:port:            10.0.0.5:8080           → 10.0.0.5
+   *   - IPv6 literals:        [::1]:80                → ::1
+   * A bare IP, hostname, or CIDR is returned unchanged (CIDRs are NOT treated
+   * as URL paths, so 192.168.0.0/16 keeps its mask).
+   */
+  private extractHost(target: string): string {
+    const t = (target || '').trim()
+    if (!t) return t
+
+    const hasScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(t)
+    if (hasScheme || t.startsWith('//')) {
+      try {
+        const u = new URL(hasScheme ? t : 'http:' + t)
+        return this.normalizeHost(u.hostname)
+      } catch { /* fall through to heuristics */ }
+    }
+
+    // Scheme-less URL with a path (e.g. "localhost/admin"), but never a CIDR.
+    if (t.includes('/') && !this.looksLikeCidr(t)) {
+      try {
+        const u = new URL('http://' + t)
+        return this.normalizeHost(u.hostname)
+      } catch { /* fall through */ }
+    }
+
+    // host:port (single colon, not an IPv6 literal).
+    const hostPort = t.match(/^([a-zA-Z0-9.-]+):\d+$/)
+    if (hostPort) return this.normalizeHost(hostPort[1])
+
+    return this.normalizeHost(t)
+  }
+
+  /** Strip IPv6 brackets and lower-case the host for consistent matching. */
+  private normalizeHost(host: string): string {
+    let h = host.trim()
+    if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1)
+    return h.toLowerCase()
+  }
+
+  /** True for an IPv4 CIDR like 192.168.0.0/16 (so it isn't parsed as a URL). */
+  private looksLikeCidr(t: string): boolean {
+    return /^[0-9.]+\/\d{1,2}$/.test(t)
   }
   
   /**

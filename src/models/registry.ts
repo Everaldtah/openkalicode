@@ -20,25 +20,26 @@ export interface ModelEntry {
   label: string          // shown in the picker
   baseUrl?: string       // only for local/openai-compatible
   loaded?: boolean       // for LM Studio: true if currently loaded in memory
+  toolCapable?: boolean  // for LM Studio: model advertises tool_use capability
   offline?: boolean      // local provider was probed but not reachable
 }
 
 // ─── static catalogs ────────────────────────────────────────────────────────
 
 // Ordered most-capable → legacy. The picker highlights the first selectable
-// entry, so Claude Fable 5 (Anthropic's most capable widely released model) is
-// the default highlight. IDs are the exact API strings — do not append date
-// suffixes.
+// entry, so Claude Fable 5.1 (Anthropic's most capable widely released model)
+// is the default highlight. IDs are the exact API strings the Claude Code
+// subscription accepts — do not append date suffixes except where the model
+// only ships as a dated ID (Haiku 4.5).
 const ANTHROPIC_MODELS: ModelEntry[] = [
-  { provider: 'anthropic', model: 'claude-fable-5',      label: 'Claude Fable 5   (flagship · most capable)' },
-  { provider: 'anthropic', model: 'claude-opus-4-8',     label: 'Claude Opus 4.8   (agentic flagship)' },
-  { provider: 'anthropic', model: 'claude-opus-4-7',     label: 'Claude Opus 4.7' },
-  { provider: 'anthropic', model: 'claude-opus-4-6',     label: 'Claude Opus 4.6' },
-  { provider: 'anthropic', model: 'claude-sonnet-5',     label: 'Claude Sonnet 5   (balanced · default)' },
-  { provider: 'anthropic', model: 'claude-sonnet-4-6',   label: 'Claude Sonnet 4.6' },
-  { provider: 'anthropic', model: 'claude-haiku-4-5',    label: 'Claude Haiku 4.5  (fast/cheap)' },
-  { provider: 'anthropic', model: 'claude-opus-4-5',     label: 'Claude Opus 4.5   (legacy)' },
-  { provider: 'anthropic', model: 'claude-sonnet-4-5',   label: 'Claude Sonnet 4.5 (legacy)' }
+  { provider: 'anthropic', model: 'claude-fable-5-1',           label: 'Claude Fable 5.1  (flagship · most capable)' },
+  { provider: 'anthropic', model: 'claude-opus-5',             label: 'Claude Opus 5     (agentic flagship)' },
+  { provider: 'anthropic', model: 'claude-sonnet-5',          label: 'Claude Sonnet 5   (balanced · default)' },
+  { provider: 'anthropic', model: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5  (fast/cheap)' },
+  { provider: 'anthropic', model: 'claude-opus-4-8',           label: 'Claude Opus 4.8   (legacy)' },
+  { provider: 'anthropic', model: 'claude-opus-4-6',           label: 'Claude Opus 4.6   (legacy)' },
+  { provider: 'anthropic', model: 'claude-sonnet-4-6',         label: 'Claude Sonnet 4.6 (legacy)' },
+  { provider: 'anthropic', model: 'claude-sonnet-4-5',         label: 'Claude Sonnet 4.5 (legacy)' }
 ]
 
 const OPENAI_MODELS: ModelEntry[] = [
@@ -66,8 +67,46 @@ async function fetchJSON(url: string, timeoutMs = 800): Promise<unknown | null> 
   }
 }
 
-/** Probe LM Studio's OpenAI-compatible /v1/models endpoint. */
+/**
+ * Probe LM Studio for available models.
+ *
+ * The OpenAI-compatible `/v1/models` endpoint does NOT report which model is
+ * currently loaded into memory or whether it can call tools — every entry
+ * looks identical. LM Studio's native REST API (`/api/v0/models`) does report
+ * both (`state: "loaded" | "not-loaded"` and a `capabilities` array that
+ * includes `"tool_use"`), so we prefer it and fall back to `/v1/models` only
+ * if the native API is unavailable (older LM Studio builds).
+ *
+ * `baseUrl` is the OpenAI-compatible URL (…/v1); the native API lives at the
+ * same host under /api/v0, which we derive from it.
+ */
 export async function probeLMStudio(baseUrl = LMSTUDIO_URL): Promise<ModelEntry[]> {
+  const nativeBase = baseUrl.replace(/\/v1\/?$/, '')
+
+  // Preferred path: native API with state + capabilities.
+  const native = await fetchJSON(`${nativeBase}/api/v0/models`) as
+    { data?: Array<{ id: string; state?: string; type?: string; capabilities?: string[] }> } | null
+  if (native && Array.isArray(native.data) && native.data.length > 0) {
+    return native.data
+      // Hide pure embedding models from the chat-model picker — they can't
+      // drive an agent loop.
+      .filter(m => m.type !== 'embeddings')
+      .map(m => {
+        const loaded = m.state === 'loaded'
+        const tools = Array.isArray(m.capabilities) && m.capabilities.includes('tool_use')
+        const badges = `${loaded ? '  ●' : ''}${tools ? '' : '  ⚠no-tools'}`
+        return {
+          provider: 'lmstudio' as const,
+          model: m.id,
+          label: `LM Studio · ${m.id}${badges}`,
+          baseUrl,
+          loaded,
+          toolCapable: tools
+        }
+      })
+  }
+
+  // Fallback: OpenAI-compatible endpoint (no state/capability info).
   const data = await fetchJSON(`${baseUrl}/models`) as { data?: Array<{ id: string; state?: string }> } | null
   if (!data || !Array.isArray(data.data)) {
     return [{ provider: 'lmstudio', model: '(not running)', label: 'LM Studio — offline', baseUrl, offline: true }]
@@ -120,8 +159,15 @@ export async function buildCatalog(): Promise<ModelEntry[]> {
  */
 export async function autoDetectLocal(): Promise<ModelEntry | null> {
   const lm = await probeLMStudio()
+  // Best: a model already loaded in memory that can call tools.
+  const loadedToolCapable = lm.find(m => m.loaded && m.toolCapable)
+  if (loadedToolCapable) return loadedToolCapable
+  // Next: any loaded model (agent tool loop may be degraded but connection works).
   const loaded = lm.find(m => m.loaded)
   if (loaded) return loaded
+  // Next: any installed tool-capable model (LM Studio JIT-loads it on first call).
+  const anyToolCapable = lm.find(m => !m.offline && m.toolCapable)
+  if (anyToolCapable) return anyToolCapable
   const anyLm = lm.find(m => !m.offline)
   if (anyLm) return anyLm
   const ol = await probeOllama()

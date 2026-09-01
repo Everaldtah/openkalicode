@@ -8,7 +8,7 @@
  *
  * Examples:
  *   # Anthropic, subscription via prior `claude login`
- *   okal-agent --provider anthropic --model claude-sonnet-4-6 \
+ *   okal-agent --provider anthropic --model claude-fable-5-1 \
  *     -- "scan 192.168.1.0/24 and report risky open ports"
  *
  *   # LM Studio (default localhost:1234)
@@ -103,7 +103,7 @@ OpenKaliClaude Agent
 
 Options:
   --provider <name>     anthropic | lmstudio | ollama | custom  (default: anthropic)
-  --model <name>        Model name (e.g. claude-sonnet-4-6, llama3.1:8b, qwen2.5-coder)
+  --model <name>        Model name (e.g. claude-fable-5-1, claude-sonnet-5, qwen2.5-coder:7b)
   --base-url <url>      Override OpenAI-compatible base URL (local providers only)
   --api-key <key>       Optional API key (local providers ignore this)
   --scope <json>        ScopeConstraint JSON; defaults to localhost + RFC1918

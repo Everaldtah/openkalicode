@@ -21,7 +21,7 @@
 
 import { AgentToolContext, buildOpenAITools, dispatchToolCall, buildAgentSystemPrompt } from './tools.js'
 import { ThinkingStreamFilter, stripThinking } from '../util/thinkingFilter.js'
-import { renderCommandsToStderr } from '../util/commandLog.js'
+import { renderCommandsToStderr, emitStatus } from '../util/commandLog.js'
 
 /**
  * Extra guardrails specifically for small OSS models (Qwen, Llama, DeepSeek…).
@@ -84,10 +84,12 @@ export async function runLocalAgent(opts: LocalAgentOptions): Promise<void> {
   })
 
   const tools = buildOpenAITools()
-  // Prepend local-model guardrails to the normal system prompt so small OSS
+  // Prepend local-model guardrails to a COMPACT system prompt so small OSS
   // models don't leak <think> blocks, hallucinate tool names, or hammer the
-  // scope validator in a retry loop.
-  const baseSystem = opts.systemPrompt || buildAgentSystemPrompt(opts.ctx.scope)
+  // scope validator in a retry loop — and, critically, so the prompt fits the
+  // 4096-token context these models are usually JIT-loaded with (the full
+  // prompt is ~5k tokens and overflows on the first turn).
+  const baseSystem = opts.systemPrompt || buildAgentSystemPrompt(opts.ctx.scope, { compact: true })
   const systemPrompt = `${LOCAL_MODEL_RULES}\n\n${baseSystem}`
   const messages: Array<Record<string, unknown>> = [
     { role: 'system', content: systemPrompt },
@@ -103,12 +105,20 @@ export async function runLocalAgent(opts: LocalAgentOptions): Promise<void> {
   const thinkFilter = new ThinkingStreamFilter()
 
   for (let turn = 0; turn < maxTurns; turn++) {
-    const response = await client.chat.completions.create({
-      model: opts.model,
-      messages: messages as never,
-      tools: tools as never,
-      tool_choice: 'auto'
-    })
+    // Live view: show the model is generating (with a turn counter) until its
+    // reply lands, so the panel isn't a blind wait.
+    emitStatus(`model is thinking · turn ${turn + 1}/${maxTurns}`, true)
+    let response
+    try {
+      response = await client.chat.completions.create({
+        model: opts.model,
+        messages: messages as never,
+        tools: tools as never,
+        tool_choice: 'auto'
+      })
+    } finally {
+      emitStatus('', false)
+    }
 
     const choice = response.choices[0]
     const msg = choice.message

@@ -91,7 +91,7 @@ OpenKaliClaude — Interactive Security Agent
 
 Options:
   --provider <name>   anthropic | lmstudio | ollama | custom  (default: anthropic)
-  --model <name>      Model to use (default: claude-sonnet-5; /models to pick, up to Claude Fable 5)
+  --model <name>      Model to use (default: claude-sonnet-5; /models to pick, up to Claude Fable 5.1)
   --base-url <url>    Override base URL for local providers
   --scope <json>      ScopeConstraint JSON (defaults to localhost + RFC1918)
   --no-audit          Disable audit logging

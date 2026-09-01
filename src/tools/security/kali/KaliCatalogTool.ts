@@ -25,8 +25,11 @@ import {
   findTool,
   searchCatalog,
   toolsInCategory,
+  catalogBinaries,
   KaliToolSpec,
 } from './catalog.js'
+import { probeInstalledBinaries } from '../../../util/toolInstalled.js'
+import { dockerLabel } from '../../../util/dockerExec.js'
 
 const KaliCatalogInputSchema = z.object({
   action: z.enum(['list-categories', 'list', 'search', 'detail']).default('list-categories')
@@ -40,9 +43,12 @@ type KaliCatalogInput = z.infer<typeof KaliCatalogInputSchema>
 
 export interface KaliCatalogOutput {
   action: string
-  categories?: Array<{ category: string; count: number; tools: string[] }>
-  tools?: Array<Pick<KaliToolSpec, 'binary' | 'name' | 'category' | 'permission' | 'summary'> & { destructive: boolean }>
-  detail?: KaliToolSpec
+  categories?: Array<{ category: string; count: number; installed: number; tools: string[] }>
+  tools?: Array<Pick<KaliToolSpec, 'binary' | 'name' | 'category' | 'permission' | 'summary'> & { destructive: boolean; installed?: boolean }>
+  detail?: KaliToolSpec & { installed?: boolean }
+  /** How install state was resolved. false → unknown (no POSIX backend to probe). */
+  installStateKnown?: boolean
+  backend?: string
   message?: string
 }
 
@@ -66,30 +72,45 @@ export class KaliCatalogTool extends SecurityTool<typeof KaliCatalogInputSchema,
   }
 
   async execute(input: KaliCatalogInput): Promise<KaliCatalogOutput> {
+    // Resolve real install state up front so every action can report which
+    // catalogued tools are actually present in the active backend. Best-effort:
+    // `installed` stays undefined when the backend can't be probed.
+    const installed = await probeInstalledBinaries(Array.from(catalogBinaries()))
+    const known = installed !== null
+    const isInstalled = (bin: string): boolean | undefined =>
+      installed ? installed.has(bin.toLowerCase()) : undefined
+    const meta = { installStateKnown: known, backend: dockerLabel() }
+
     switch (input.action) {
       case 'list-categories':
         return {
           action: input.action,
+          ...meta,
           categories: KALI_CATEGORIES.map(cat => {
             const tools = toolsInCategory(cat)
             const bins = Array.from(new Set(tools.map(t => t.binary)))
-            return { category: cat, count: bins.length, tools: bins }
+            const installedCount = installed ? bins.filter(b => installed.has(b.toLowerCase())).length : 0
+            return { category: cat, count: bins.length, installed: installedCount, tools: bins }
           }),
+          message: known
+            ? undefined
+            : 'Install state unknown (no POSIX backend to probe) — counts show catalogued tools only.',
         }
 
       case 'list': {
         const cat = (input.category || '').trim().toLowerCase() as KaliCategory
         if (!KALI_CATEGORIES.includes(cat)) {
-          return { action: input.action, message: `Unknown category '${input.category}'. Valid: ${KALI_CATEGORIES.join(', ')}` }
+          return { action: input.action, ...meta, message: `Unknown category '${input.category}'. Valid: ${KALI_CATEGORIES.join(', ')}` }
         }
-        return { action: input.action, tools: this.summaries(toolsInCategory(cat)) }
+        return { action: input.action, ...meta, tools: this.summaries(toolsInCategory(cat), isInstalled) }
       }
 
       case 'search': {
         const hits = searchCatalog(input.query || '')
         return {
           action: input.action,
-          tools: this.summaries(hits),
+          ...meta,
+          tools: this.summaries(hits, isInstalled),
           message: hits.length ? undefined : `No tools matched '${input.query}'.`,
         }
       }
@@ -97,17 +118,20 @@ export class KaliCatalogTool extends SecurityTool<typeof KaliCatalogInputSchema,
       case 'detail': {
         const spec = input.tool ? findTool(input.tool) : undefined
         if (!spec) {
-          return { action: input.action, message: `'${input.tool}' is not catalogued. Try the search action, or run it anyway via the kali tool.` }
+          return { action: input.action, ...meta, message: `'${input.tool}' is not catalogued. Try the search action, or run it anyway via the kali tool.` }
         }
-        return { action: input.action, detail: spec }
+        return { action: input.action, ...meta, detail: { ...spec, installed: isInstalled(spec.binary) } }
       }
 
       default:
-        return { action: input.action, message: 'Unknown action.' }
+        return { action: input.action, ...meta, message: 'Unknown action.' }
     }
   }
 
-  private summaries(specs: KaliToolSpec[]): KaliCatalogOutput['tools'] {
+  private summaries(
+    specs: KaliToolSpec[],
+    isInstalled: (bin: string) => boolean | undefined
+  ): KaliCatalogOutput['tools'] {
     // De-dup by binary (some binaries appear under multiple categories).
     const seen = new Set<string>()
     const out: NonNullable<KaliCatalogOutput['tools']> = []
@@ -117,6 +141,7 @@ export class KaliCatalogTool extends SecurityTool<typeof KaliCatalogInputSchema,
       out.push({
         binary: t.binary, name: t.name, category: t.category,
         permission: t.permission, summary: t.summary, destructive: !!t.destructive,
+        installed: isInstalled(t.binary),
       })
     }
     return out
