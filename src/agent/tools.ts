@@ -120,26 +120,23 @@ export function buildAgentSystemPrompt(scope: ScopeConstraint, opts: SystemPromp
  * exhaustive Kali category index is collapsed to a single line.
  */
 function buildCompactAgentSystemPrompt(scope: ScopeConstraint): string {
-  const toolNames = securityTools.map(t => toolName(t.name)).join(', ')
   return [
     'You are OpenKaliClaude, an autonomous offensive-security agent built on the Kali toolchain.',
     'You CALL tools directly to scan/enumerate/exploit/crack. You never tell the user to run commands themselves — that is your job.',
     '',
-    `Purpose-built tools (call by name): ${toolNames}.`,
-    'Universal protocol for ANY other Kali tool:',
-    '- kali_catalog — discover tools/usage. action:"list-categories" | "list"(category) | "search"(query) | "detail"(tool). Entries carry installed:true/false — never run a tool whose installed is false; suggest installing it or pick an installed one.',
-    '- kali — run any tool. Pass tool (binary), args (token array), and target (scope-checked). Use dryRun:true to preview.',
-    `Kali categories: ${categoryIndex().split('\n')[0] || 'information-gathering, vulnerability-analysis, web-application, password-attacks, wireless-attacks, exploitation, forensics, …'}`,
+    'You have exactly TWO tools — run every Kali binary through them:',
+    '- kali_catalog — discover tools and their usage. action:"list-categories" | "list"(category) | "search"(query) | "detail"(tool) for exact flags + examples. Entries carry installed:true/false — never run a tool whose installed is false; suggest installing it or pick an installed one.',
+    '- kali — execute ANY Kali binary. Pass tool (e.g. "nmap"), args (token array, e.g. ["-sV","--top-ports","100","10.0.0.5"]), and target (IP/host/URL, scope-checked). Use dryRun:true to preview the exact command. Look a tool up with kali_catalog first if unsure of flags.',
     '',
     'Rules:',
     `1. Scope is enforced by the framework. allowed networks: ${JSON.stringify(scope.allowedNetworks)}; allowed domains: ${JSON.stringify(scope.allowedDomains)}. A call outside scope is rejected — do not retry it; tell the user which scope to add.`,
-    '2. Methodology: recon (nmap quick) → enumerate (nikto on web ports) → assess (nmap vuln) → exploit only with explicit confirmation (prefer checkOnly) → crack (hashcat) → report by severity.',
+    '2. Methodology (run each step via the kali tool): recon (nmap -T4 -F) → enumerate web ports with nikto/whatweb → assess (nmap --script vuln) → exploit only with explicit confirmation → crack hashes with hashcat/john → report by severity.',
     '3. Call AT MOST ONE tool per turn, then read its result before the next step.',
-    '4. If a tool is "not installed", do not retry it — say so and suggest an alternative.',
+    '4. If kali reports a tool is "not installed", do not retry it — say so and suggest an alternative or that the user install it.',
     '5. Destructive/high-risk actions (metasploit exploit, sqlmap --dump, hashcat brute-force) need explicit user go-ahead first.',
     '6. Be terse. No chain-of-thought narration. Do the work, then report findings grouped host → service → finding, with remediation.',
     '',
-    'Read the request, pick the right tool, and CALL IT.'
+    'For a plain greeting or question, just reply in text — do not call a tool. Otherwise pick the right binary and run it via kali.'
   ].join('\n')
 }
 
@@ -188,11 +185,13 @@ export interface OpenAIToolsOptions {
   lean?: boolean
 }
 
-// Core tools exposed to small local models. The universal `kali` runner +
-// `kali_catalog` already reach every other Kali binary, so dropping the heavier
-// dedicated schemas (notably metasploit) costs no real capability while keeping
-// the payload inside a 4096-token context.
-const LEAN_LOCAL_TOOLS = new Set(['kali_catalog', 'kali', 'nmap', 'nikto', 'sqlmap', 'hashcat'])
+// Core tools exposed to small local models. Just the two universal tools: the
+// `kali` runner executes ANY binary and `kali_catalog` documents flags/usage on
+// demand, so this loses no real capability — while the heavy dedicated schemas
+// (nmap/sqlmap/hashcat/metasploit each carry a large multi-field JSON schema)
+// are what actually blow past a 4096-token context. Two tools keep the
+// non-truncatable tool prefix small enough to fit with room for conversation.
+const LEAN_LOCAL_TOOLS = new Set(['kali_catalog', 'kali'])
 
 /** Recursively remove `description` keys from a JSON schema to shrink it. */
 function stripSchemaDescriptions(node: unknown): unknown {
