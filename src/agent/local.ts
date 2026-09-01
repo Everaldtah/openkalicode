@@ -83,7 +83,11 @@ export async function runLocalAgent(opts: LocalAgentOptions): Promise<void> {
     apiKey: opts.apiKey || 'not-needed'
   })
 
-  const tools = buildOpenAITools()
+  // Lean tool payload: small local models are usually loaded with a 4096-token
+  // context, and the full tool schemas alone (~7-8k tokens) overflow it before
+  // the conversation starts. The lean set keeps real capability via the kali
+  // runner + catalog.
+  const tools = buildOpenAITools({ lean: true })
   // Prepend local-model guardrails to a COMPACT system prompt so small OSS
   // models don't leak <think> blocks, hallucinate tool names, or hammer the
   // scope validator in a retry loop — and, critically, so the prompt fits the

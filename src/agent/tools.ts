@@ -176,18 +176,58 @@ export function anthropicAllowedToolNames(): string[] {
   return securityTools.map(t => `mcp__${ANTHROPIC_MCP_SERVER}__${toolName(t.name)}`)
 }
 
+export interface OpenAIToolsOptions {
+  /**
+   * Slim the payload for small-context local models. The full tool set with
+   * every parameter's description and the legal-warning boilerplate is the
+   * dominant, non-truncatable prefix (`n_keep`) LM Studio/Ollama must hold —
+   * ~7-8k tokens, which overflows a 4096 context before the user even speaks.
+   * Lean mode: expose a core subset, keep a one-line function description, and
+   * strip per-parameter description text from the JSON schema.
+   */
+  lean?: boolean
+}
+
+// Core tools exposed to small local models. The universal `kali` runner +
+// `kali_catalog` already reach every other Kali binary, so dropping the heavier
+// dedicated schemas (notably metasploit) costs no real capability while keeping
+// the payload inside a 4096-token context.
+const LEAN_LOCAL_TOOLS = new Set(['kali_catalog', 'kali', 'nmap', 'nikto', 'sqlmap', 'hashcat'])
+
+/** Recursively remove `description` keys from a JSON schema to shrink it. */
+function stripSchemaDescriptions(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(stripSchemaDescriptions)
+  if (node && typeof node === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      if (k === 'description') continue
+      out[k] = stripSchemaDescriptions(v)
+    }
+    return out
+  }
+  return node
+}
+
 /**
  * OpenAI-compatible tool definitions (LM Studio, Ollama, etc.)
  */
-export function buildOpenAITools() {
-  return securityTools.map(t => ({
-    type: 'function' as const,
-    function: {
-      name: toolName(t.name),
-      description: `${t.description}\n\nCategory: ${t.config.category}\nPermission: ${t.config.permissionLevel}\n\n${(t.config.legalWarnings || []).join('\n')}`,
-      parameters: zodToJsonSchema(t.inputSchema, { target: 'openApi3' }) as Record<string, unknown>
+export function buildOpenAITools(opts: OpenAIToolsOptions = {}) {
+  const source = opts.lean
+    ? securityTools.filter(t => LEAN_LOCAL_TOOLS.has(toolName(t.name)))
+    : securityTools
+  return source.map(t => {
+    const schema = zodToJsonSchema(t.inputSchema, { target: 'openApi3' }) as Record<string, unknown>
+    return {
+      type: 'function' as const,
+      function: {
+        name: toolName(t.name),
+        description: opts.lean
+          ? t.description
+          : `${t.description}\n\nCategory: ${t.config.category}\nPermission: ${t.config.permissionLevel}\n\n${(t.config.legalWarnings || []).join('\n')}`,
+        parameters: (opts.lean ? stripSchemaDescriptions(schema) : schema) as Record<string, unknown>,
+      },
     }
-  }))
+  })
 }
 
 /**
