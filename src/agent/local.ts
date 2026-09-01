@@ -22,6 +22,7 @@
 import { AgentToolContext, buildOpenAITools, dispatchToolCall, buildAgentSystemPrompt } from './tools.js'
 import { ThinkingStreamFilter, stripThinking } from '../util/thinkingFilter.js'
 import { renderCommandsToStderr, emitStatus } from '../util/commandLog.js'
+import { tokenMeter } from '../util/tokenMeter.js'
 
 /**
  * Extra guardrails specifically for small OSS models (Qwen, Llama, DeepSeek…).
@@ -108,11 +109,18 @@ export async function runLocalAgent(opts: LocalAgentOptions): Promise<void> {
   // before it hits the user's terminal OR the persistent memory log.
   const thinkFilter = new ThinkingStreamFilter()
 
+  // Token accounting for the whole run (one user turn = possibly several
+  // model round-trips). We sum usage across round-trips and record it once.
+  let runInput = 0
+  let runOutput = 0
+  let runGenMs = 0
+
   for (let turn = 0; turn < maxTurns; turn++) {
     // Live view: show the model is generating (with a turn counter) until its
     // reply lands, so the panel isn't a blind wait.
     emitStatus(`model is thinking · turn ${turn + 1}/${maxTurns}`, true)
     let response
+    const genStart = Date.now()
     try {
       response = await client.chat.completions.create({
         model: opts.model,
@@ -122,6 +130,12 @@ export async function runLocalAgent(opts: LocalAgentOptions): Promise<void> {
       })
     } finally {
       emitStatus('', false)
+    }
+    runGenMs += Date.now() - genStart
+    const usage = (response as { usage?: { prompt_tokens?: number; completion_tokens?: number } }).usage
+    if (usage) {
+      runInput += usage.prompt_tokens || 0
+      runOutput += usage.completion_tokens || 0
     }
 
     const choice = response.choices[0]
@@ -138,8 +152,10 @@ export async function runLocalAgent(opts: LocalAgentOptions): Promise<void> {
 
     const toolCalls = (msg as { tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }> }).tool_calls
     if (!toolCalls || toolCalls.length === 0) {
-      // Model produced a plain answer — we're done.
-      console.error(`\n[agent] turns=${turn + 1} provider=${opts.provider} model=${opts.model}`)
+      // Model produced a plain answer — we're done. Record token usage for the
+      // session meter and surface throughput on the status line.
+      tokenMeter.recordTurn({ inputTokens: runInput, outputTokens: runOutput, ms: runGenMs })
+      console.error(`\n[agent] turns=${turn + 1} provider=${opts.provider} model=${opts.model}  ${tokenMeter.formatTurnLine()}`)
       return
     }
 
@@ -155,5 +171,6 @@ export async function runLocalAgent(opts: LocalAgentOptions): Promise<void> {
     }
   }
 
-  console.error(`\n[agent] hit maxTurns=${maxTurns} without resolution`)
+  tokenMeter.recordTurn({ inputTokens: runInput, outputTokens: runOutput, ms: runGenMs })
+  console.error(`\n[agent] hit maxTurns=${maxTurns} without resolution  ${tokenMeter.formatTurnLine()}`)
 }

@@ -25,6 +25,7 @@ import { probeTools, formatBanner } from '../util/toolAvailability.js'
 import { primarySubnet } from '../util/networkDetect.js'
 import { stripThinking } from '../util/thinkingFilter.js'
 import { dockerContainer, dockerLabel, autoConfigureWslBackend, wslDistro } from '../util/dockerExec.js'
+import { tokenMeter } from '../util/tokenMeter.js'
 
 // ─── config from env / argv ──────────────────────────────────────────────────
 
@@ -243,6 +244,7 @@ async function handleSlash(line: string, cfg: ReplConfig, mem: MemoryManager): P
       console.log('  /models   Scrollable picker: Anthropic / OpenAI / LM Studio / Ollama')
       console.log('  /local    Auto-detect running local model (LM Studio or Ollama)')
       console.log('  /memory   Persistent memory stats + storage location')
+      console.log('  /tokens   Session token usage + throughput (tokens/sec)')
       console.log('  /compact  Force context compaction of the running session')
       console.log('  /docker   Show/toggle docker-exec mode (runs tools in a Kali container)')
       console.log('  /tools    List installed security tools')
@@ -272,6 +274,17 @@ async function handleSlash(line: string, cfg: ReplConfig, mem: MemoryManager): P
       cfg.baseUrl = found.baseUrl
       console.log(C.ok(`  → connected to ${found.label}`))
       console.log(C.dim(`    provider=${cfg.provider} model=${cfg.model} baseUrl=${cfg.baseUrl}\n`))
+      return true
+    }
+    case 'tokens': {
+      const s = tokenMeter.session()
+      if (s.turns === 0) {
+        console.log(C.dim('\n  No tokens used yet this session.\n'))
+        return true
+      }
+      console.log(C.label('\nSession token usage:'))
+      console.log(tokenMeter.formatSession())
+      console.log()
       return true
     }
     case 'memory': {
@@ -510,6 +523,8 @@ async function main(): Promise<void> {
     rl.pause()
     await dispatchPrompt(line, cfg, mem)
     rl.resume()
+    // The agent run prints its own token line (⚡ …/tokens for the session
+    // detail); no extra footer needed here.
     console.log()
     rl.prompt()
   }

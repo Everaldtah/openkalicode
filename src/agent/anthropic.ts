@@ -14,6 +14,7 @@
 
 import { AgentToolContext, buildAnthropicMcpServer, buildAgentSystemPrompt, anthropicAllowedToolNames } from './tools.js'
 import { renderCommandsToStderr, emitStatus } from '../util/commandLog.js'
+import { tokenMeter } from '../util/tokenMeter.js'
 
 export interface AnthropicAgentOptions {
   prompt: string
@@ -57,6 +58,7 @@ export async function runAnthropicAgent(opts: AnthropicAgentOptions): Promise<vo
   // calls/results inside the run are surfaced by the shared dispatch layer,
   // which also re-arms this spinner after each tool returns.
   emitStatus('Claude is thinking', true)
+  const runStart = Date.now()
 
   for await (const message of response) {
     if (message.type === 'assistant') {
@@ -74,9 +76,24 @@ export async function runAnthropicAgent(opts: AnthropicAgentOptions): Promise<vo
       }
     } else if (message.type === 'result') {
       emitStatus('', false)
-      const result = message as { subtype?: string; total_cost_usd?: number; num_turns?: number }
+      const result = message as {
+        subtype?: string; total_cost_usd?: number; num_turns?: number
+        usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number }
+      }
+      // Record token usage for the session meter. Count cache reads/creates as
+      // input so the totals reflect everything the model actually processed.
+      const u = result.usage
+      if (u) {
+        const input = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0)
+        tokenMeter.recordTurn({
+          inputTokens: input,
+          outputTokens: u.output_tokens || 0,
+          ms: Date.now() - runStart,
+          costUsd: result.total_cost_usd,
+        })
+      }
       if (result.subtype === 'success') {
-        console.error(`\n[agent] turns=${result.num_turns} cost=$${result.total_cost_usd?.toFixed(4) ?? '0'}`)
+        console.error(`\n[agent] turns=${result.num_turns} cost=$${result.total_cost_usd?.toFixed(4) ?? '0'}  ${tokenMeter.formatTurnLine()}`)
       } else {
         console.error(`\n[agent] finished: ${result.subtype}`)
       }

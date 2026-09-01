@@ -42,16 +42,31 @@ export function resetInstalledProbe(): void {
   cache.clear()
 }
 
-function runProbe(bins: string[]): Promise<Set<string> | null> {
+async function runProbe(bins: string[]): Promise<Set<string> | null> {
   const list = Array.from(new Set(bins.filter(safeBin)))
-  if (list.length === 0) return Promise.resolve(new Set<string>())
+  if (list.length === 0) return new Set<string>()
 
-  // Use `which <bin1> <bin2> …`, passing each binary as its OWN argv token.
-  // This resolves every binary in one round trip and — unlike a `sh -lc "for …"`
-  // script — survives the Windows→WSL argument marshaling intact (a shell loop
-  // string gets mangled crossing that boundary and silently finds nothing).
-  // `which` prints the full path of each installed binary to stdout and simply
-  // omits the missing ones (exiting non-zero, which we ignore).
+  // Probe in chunks so each call stays small, and run the chunks in PARALLEL:
+  // every `wsl.exe` invocation pays its own distro-startup latency, so running
+  // them concurrently keeps the whole probe to roughly one round trip instead
+  // of N. If ANY chunk fails outright (backend unreachable), the whole probe is
+  // "unknown" (null) rather than a misleading partial.
+  const CHUNK = 40
+  const chunks: string[][] = []
+  for (let i = 0; i < list.length; i += CHUNK) chunks.push(list.slice(i, i + CHUNK))
+
+  const results = await Promise.all(chunks.map(runWhichChunk))
+  if (results.some(r => r === null)) return null
+  const found = new Set<string>()
+  for (const r of results) for (const b of r as Set<string>) found.add(b)
+  return found
+}
+
+function runWhichChunk(list: string[]): Promise<Set<string> | null> {
+  // `which <bin1> <bin2> …`, each binary as its OWN argv token. This survives
+  // the Windows→WSL argument marshaling intact (a `sh -lc "for …"` script gets
+  // mangled crossing that boundary and silently finds nothing). `which` prints
+  // the path of each installed binary to stdout and omits the missing ones.
   let cmd: string
   let args: string[]
   const container = dockerContainer()
@@ -73,21 +88,25 @@ function runProbe(bins: string[]): Promise<Set<string> | null> {
     let settled = false
     const done = (v: Set<string> | null) => { if (!settled) { settled = true; resolve(v) } }
     try {
-      const child = spawn(cmd, args, { windowsHide: true })
-      const killer = setTimeout(() => { try { child.kill('SIGKILL') } catch { /* noop */ } done(null) }, 8000)
-      child.stdout.on('data', (d: Buffer) => { out += d.toString() })
+      // CRITICAL: ignore stderr at the OS level. WSL prints a "Failed to start
+      // the systemd user session" line to stderr; if we leave it as an
+      // unread pipe the child can block on the write and never exit, hanging
+      // the probe until timeout. `ignore` sends it to the null device.
+      const child = spawn(cmd, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
+      const killer = setTimeout(() => { try { child.kill('SIGKILL') } catch { /* noop */ } done(null) }, 15000)
+      child.stdout?.on('data', (d: Buffer) => { out += d.toString() })
       child.on('error', () => { clearTimeout(killer); done(null) })
       child.on('close', () => {
         clearTimeout(killer)
         // Each line is a resolved path like `/usr/bin/nmap`; reduce to the
         // lower-cased basename so it matches catalogue binary names.
-        const found = new Set(
+        const hits = new Set(
           out.split(/\r?\n/)
             .map(s => s.trim())
             .filter(Boolean)
             .map(p => (p.split(/[/\\]/).pop() || p).toLowerCase())
         )
-        done(found)
+        done(hits)
       })
     } catch {
       done(null)
