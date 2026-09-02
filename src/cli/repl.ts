@@ -382,10 +382,17 @@ async function dispatchPrompt(prompt: string, cfg: ReplConfig, mem: MemoryManage
     dryRun: false
   }
 
-  // Persist the user turn and inject memory preamble so the agent has
-  // cross-session context without paying for it in every prompt.
+  // Persist the user turn and inject a memory preamble so the agent has
+  // cross-session context. Size the preamble to the provider's context window:
+  // local models are usually loaded at 4096 tokens, where the default 4k-token
+  // preamble alone overflows (n_keep >= n_ctx) before the model even sees the
+  // prompt. Keep it small for local, generous for the cloud model.
   mem.recordUser(prompt)
-  const preamble = mem.buildPreamble()
+  // ~1000 tokens of memory + the ~1.4k-token local system/tool prefix leaves
+  // comfortable room for the reply inside a 4096-token local context; the cloud
+  // model has room for far more.
+  const preambleBudget = cfg.provider === 'anthropic' ? 4_000 : 1_000
+  const preamble = mem.buildPreamble(preambleBudget)
   const augmented = preamble ? `${preamble}\n${prompt}` : prompt
 
   // Capture assistant output as it streams by hooking stdout.write.

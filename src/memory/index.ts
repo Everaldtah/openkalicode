@@ -78,11 +78,23 @@ export class MemoryManager {
    */
   buildPreamble(budgetTokens = 4_000): string {
     const parts: string[] = []
+    let used = 0
+
     if (this.summary) {
-      parts.push('## Prior session summary\n' + this.summary.trim())
+      // The rolling summary must also respect the budget — it grows across
+      // sessions, and on a small-context model an oversized summary alone can
+      // overflow. Reserve up to half the budget for it and truncate (keeping
+      // the most recent tail) if it's larger.
+      let sum = this.summary.trim()
+      const sumBudget = Math.max(1, Math.floor(budgetTokens / 2))
+      if (estimateTokens(sum) > sumBudget) {
+        sum = '…(older summary truncated)…\n' + sum.slice(-(sumBudget * 4))
+      }
+      parts.push('## Prior session summary\n' + sum)
+      used += estimateTokens(sum)
     }
+
     const tail: MemoryEntry[] = []
-    let used = this.summary ? estimateTokens(this.summary) : 0
     for (let i = this.entries.length - 1; i >= 0; i--) {
       const e = this.entries[i]
       const t = e.tokens || estimateTokens(e.content)
